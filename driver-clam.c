@@ -262,9 +262,9 @@ static void clam_detect(void)
 	usb_detect(&clam_drv, clam_detect_one);
 }
 
-int cn = 0;
-int ct = 0;
-int cw = 0;
+//int cn = 0;
+//int ct = 0;
+//int cw = 0;
 
 static int64_t clam_scanwork(struct thr_info *thr)
 {
@@ -274,15 +274,15 @@ static int64_t clam_scanwork(struct thr_info *thr)
 
 	if (cgpu->usbinfo.nodev)
 		return -1;
+/*
+	if (cw % 50 == 0)
+	{
+		uint32_t n,r;
+		usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, &n, sizeof(n), &r, C_CLAM_CHANNELS);
 
-//	if (cw % 50 == 0)
-//	{
-//		uint32_t n,r;
-//		usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, &n, sizeof(n), &r, C_CLAM_CHANNELS);
-//
-//		applog(LOG_ERR, "[Clam Debug] cw:%d, cn:%d, ct:%d, workqueue:%d", cw, cn, ct, n);
-//	}
-
+		applog(LOG_ERR, "[Clam Debug] cw:%d, cn:%d, ct:%d, workqueue:%d", cw, cn, ct, n);
+	}
+*/
 	struct clam_result result;
 	if (unlikely(!clam_read_result(cgpu, &result, 2000)))	// 2s is long enough for single core to respond or timeout
 	{
@@ -296,7 +296,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		struct channel_info *ch_info = &info->channels[result.channel_id];
 		if (result.type == CLAM_RESULT_TYPE_NONCE)
 		{
-			cn++;
+		//	cn++;
 			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
 
 			//try submit
@@ -358,7 +358,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			}
 */
 			ch_info->last_nonce = 0;
-			ct++;
+		//	ct++;
 			return 0x100000000 / 2;
 		}
 		else
@@ -384,9 +384,9 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 		work_completed(cgpu, work);
 		return false;
 	}
-	cw++;
+	info->work_count++;
 	info->controller_queue_size++;
-	
+
 	if (info->array_top == WORK_ARRAY_SIZE)
 	{
 		//full
@@ -400,6 +400,18 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 	for (i = info->array_top - 1; i > 0 ;i--)
 		info->work_array[i] = info->work_array[i-1];
 	info->work_array[0] = work;
+
+	if (info->work_count % 1000 == 0)
+	{
+		//recalibrate queue size
+		uint32_t n,r;
+		int ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, (char *)&n, sizeof(n), &r, C_CLAM_CHANNELS);
+		if (ret == LIBUSB_SUCCESS && r == 4)
+		{
+			info->controller_queue_size = n;
+		}
+	}	
+		
 
 	return info->controller_queue_size >= CONTROLLER_QUEUE_TARGET_SIZE;
 }
