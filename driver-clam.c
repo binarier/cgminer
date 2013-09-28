@@ -46,6 +46,7 @@ static struct timeval reg_read_timeout = {0, 100000};	//0.1s
 static struct timeval test_work_timeout = {1, 0};	//0x187a2 should come out very soon
 
 int opt_clam_clock = CLAM_DEFAULT_CLOCK;
+int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
 bool opt_clam_use_queue = true;
 
 static bool clam_read(int fd, struct timeval *timeout, uint32_t *result)
@@ -181,7 +182,7 @@ static bool request_register(int fd, uint8_t chip_id, uint8_t address, bool read
 	//write chip id
 	if (unlikely(!clam_write(fd, &chip_id, 1)))
 	{
-		applog(LOG_ERR, "write chip_id [%02x] failed", chip_id);
+		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
 		return false;
 	}
 
@@ -193,7 +194,7 @@ static bool request_register(int fd, uint8_t chip_id, uint8_t address, bool read
 
 	if (unlikely(!clam_write(fd, &address, 1)))
 	{
-		applog(LOG_ERR, "write register address %02x of chip %02x failed", address, chip_id);
+		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
 		return false;
 	}
 	return true;
@@ -279,6 +280,25 @@ static bool set_core_mask(int fd, uint8_t chip_id, uint8_t core_mask)
 	return write_register(fd, chip_id, CLAM_REG_CORE_MASK, core_mask);
 }
 
+static bool set_pll_simple(const int fd, const int chip_id, int frequency)
+{
+	//default method to modify only M value
+	uint8_t m = (frequency << CLAM_PLL_DEFAULT_OD) / (CLAM_PLL_DEFAULT_XIN / CLAM_PLL_DEFAULT_N);
+	uint8_t n = CLAM_PLL_DEFAULT_N;
+	uint8_t od = CLAM_PLL_DEFAULT_OD;
+	applog(LOG_DEBUG, "[Clam] set PLL M/N/OD value to %02x/%02x/%02x", m, n, od);
+	if (unlikely(!write_register(fd, chip_id, CLAM_REG_PLL1, m)))
+		return false;
+	uint8_t pll2 = (n << 4) | ((od & 0x3) << 2);
+	if (unlikely(!write_register(fd, chip_id, CLAM_REG_PLL2, pll2)))
+		return false;
+	//PLL should be reset after registers have been set
+	if (unlikely(!write_register(fd, chip_id, CLAM_REG_PLL2, pll2 | 0x01)))
+		return false;
+	return true;
+
+}
+
 static bool send_test_work(int fd)
 {
 	unsigned char midstate[32];
@@ -323,7 +343,7 @@ static bool assign_cores(struct clam_info *info)
 	for (i=0; i<sizeof(info->core_map); i++)
 	{
 		int j;
-		for (j=0;j<CORES_PER_CHIP;j++)
+		for (j=0;j<opt_clam_core_limit;j++)
 		{
 			if (1<<j & info->core_map[i])
 			{
@@ -339,12 +359,12 @@ static bool assign_cores(struct clam_info *info)
 
 static bool reset_all(struct clam_info *info)
 {
-	if (unlikely(!write_register(info->fd, CLAM_REG_ALL_CHIP, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
+	if (unlikely(!write_register(info->fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
 	{
 		applog(LOG_ERR, "[Clam] reset all failed");
 		return false;
 	}
-	if (unlikely(!write_register(info->fd, CLAM_REG_ALL_CHIP, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
+	if (unlikely(!write_register(info->fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
 	{
 		applog(LOG_ERR, "[Clam] init range all failed");
 		return false;
@@ -373,7 +393,7 @@ static bool detect_cores(struct clam_info *info)
 
 	//loop all the chips as independent and reset all
 
-	if (unlikely(!write_register(fd, CLAM_REG_ALL_CHIP, CLAM_REG_GENERAL_CONTROL, CLAM_GC_LOOP_DOWN_M|CLAM_GC_LOOP_DOWN_S|CLAM_GC_LOOP_UP_M|CLAM_GC_LOOP_UP_S|CLAM_GC_RESET)))
+	if (unlikely(!write_register(fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_LOOP_DOWN_M|CLAM_GC_LOOP_DOWN_S|CLAM_GC_LOOP_UP_M|CLAM_GC_LOOP_UP_S|CLAM_GC_RESET)))
 	{
 		applog(LOG_ERR, "[Clam] reset all for detection failed");
 		return false;
@@ -448,12 +468,12 @@ static bool detect_cores(struct clam_info *info)
 	}
 	applog(LOG_NOTICE, "[Clam] Line test passed.");
 
-	if (!unlikely(write_register(fd, CLAM_REG_ALL_CHIP, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
+	if (!unlikely(write_register(fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
 		return false;
 
 	//detect functional cores
 	//first disable all chips' cores
-	if (unlikely(!set_core_mask(fd, CLAM_REG_ALL_CHIP, 0)))
+	if (unlikely(!set_core_mask(fd, CLAM_CHIP_ID_ALL, 0)))
 		return false;
 
 	//then enable every single core to try golden nonce
@@ -463,7 +483,7 @@ static bool detect_cores(struct clam_info *info)
 
 		uint8_t mask = 1;
 		int j;
-		for (j=0;j<CORES_PER_CHIP;j++)
+		for (j=0;j<opt_clam_core_limit;j++)
 		{
 
 			//send test work to try the hash core
@@ -529,6 +549,12 @@ static bool clam_detect_one(const char *devpath)
 
 	info->fd = fd;
 	clear_rts(fd);
+
+	if (opt_clam_clock != CLAM_DEFAULT_CLOCK)
+	{
+		if (unlikely(!set_pll_simple(fd, CLAM_CHIP_ID_ALL, opt_clam_clock)))
+			return false;
+	}
 
 	if (unlikely(!detect_cores(info)))
 		goto failed;
@@ -688,6 +714,12 @@ char *set_clam_clock(char *arg)
 	return NULL;
 }
 
+char *set_clam_noqueue(void)
+{
+	opt_clam_use_queue = false;
+	return NULL;
+}
+
 
 struct device_drv clam_drv = {
 	.drv_id = DRIVER_CLAM,
@@ -697,7 +729,6 @@ struct device_drv clam_drv = {
 	.hash_work = hash_queued_work,
 	.scanwork = clam_scanwork,
 	.queue_full = clam_queue_full,
-
 
 	.flush_work = clam_flush_work,
 	.thread_shutdown = clam_thread_shutdown

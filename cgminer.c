@@ -63,6 +63,10 @@ char *curly = ":D";
 #include "driver-avalon.h"
 #endif
 
+#ifdef USE_CLAM
+#include "driver-clam.h"
+#endif
+
 #ifdef USE_BFLSC
 #include "driver-bflsc.h"
 #endif
@@ -77,6 +81,11 @@ char *curly = ":D";
 #	define USE_FPGA
 #elif defined(USE_ZTEX)
 #	define USE_FPGA
+#endif
+
+//will be changed to usb driver in furture
+#ifdef USE_CLAM
+#       define USE_FPGA_SERIAL
 #endif
 
 struct strategies strategies[] = {
@@ -1232,6 +1241,17 @@ static struct opt_table opt_config_table[] = {
 		     opt_set_intval, NULL, &opt_bitburner_core_voltage,
 		     "Set BitBurner core voltage, in millivolts"),
 #endif
+#ifdef USE_CLAM
+	OPT_WITH_ARG("--clam-clock",
+				set_clam_clock, NULL, NULL,
+				"Set Clam clock frequency in MHz"),
+	OPT_WITH_ARG("--clam-limit-cores",
+				set_int_1_to_10, opt_show_intval, &opt_clam_core_limit,
+				"Limit cores per Clam chip"),
+	OPT_WITHOUT_ARG("--clam-noqueue",
+				set_clam_noqueue, NULL,
+				"Disable clam device queue support"),
+#endif
 	OPT_WITHOUT_ARG("--load-balance",
 		     set_loadbalance, &pool_strategy,
 		     "Change multipool strategy from failover to quota based balance"),
@@ -1580,6 +1600,9 @@ static char *opt_verusage_and_exit(const char *extra)
 #endif
 #ifdef USE_ZTEX
 		"ztex "
+#endif
+#ifdef USE_CLAM
+		"clam "
 #endif
 		"mining support.\n"
 		, packagename);
@@ -7380,6 +7403,10 @@ extern struct device_drv modminer_drv;
 extern struct device_drv ztex_drv;
 #endif
 
+#ifdef USE_CLAM
+extern struct device_drv clam_drv;
+#endif
+
 static int cgminer_id_count = 0;
 
 /* Various noop functions for drivers that don't support or need their
@@ -7912,6 +7939,11 @@ int main(int argc, char *argv[])
 #ifdef USE_ZTEX
 	if (!opt_scrypt)
 		ztex_drv.drv_detect();
+#endif
+
+#ifdef USE_CLAM
+	if (!opt_scrypt)
+		clam_drv.drv_detect();
 #endif
 
 	/* Detect avalon last since it will try to claim the device regardless

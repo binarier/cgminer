@@ -297,6 +297,17 @@ if test "x$ztex" = xyes; then
 fi
 AM_CONDITIONAL([HAS_ZTEX], [test x$ztex = xyes])
 
+clam="no"
+
+AC_ARG_ENABLE([clam],
+	[AC_HELP_STRING([--enable-clam],[Compile support for Clam (default disabled)])],
+	[clam=$enableval]
+	)
+if test "x$clam" = xyes; then
+	AC_DEFINE([USE_CLAM], [1], [Defined to 1 if Clam support is wanted])
+fi
+AM_CONDITIONAL([HAS_CLAM], [test x$clam = xyes])
+
 curses="auto"
 
 AC_ARG_WITH([curses],
@@ -327,7 +338,7 @@ else
 	want_usbutils=false
 fi
 
-AM_CONDITIONAL([NEED_FPGAUTILS], [test x$modminer$ztex != xnono])
+AM_CONDITIONAL([NEED_FPGAUTILS], [test x$modminer$ztex$clam != xnonono])
 AM_CONDITIONAL([WANT_USBUTILS], [test x$want_usbutils != xfalse])
 AM_CONDITIONAL([HAVE_CURSES], [test x$curses = xyes])
 AM_CONDITIONAL([HAVE_WINDOWS], [test x$have_win32 = xtrue])
@@ -493,14 +504,14 @@ if test "x$opencl" != xno; then
 
 	else
 		echo "  OpenCL...............: NOT FOUND. GPU mining support DISABLED"
-		if test "x$avalon$bitforce$bitfury$icarus$ztex$modminer$bflsc" = xnonononononono; then
+		if test "x$avalon$bitforce$bitfury$icarus$ztex$modminer$bflsc$clam" = xnononononononono; then
 			AC_MSG_ERROR([No mining configured in])
 		fi
 		echo "  scrypt...............: Disabled (needs OpenCL)"
 	fi
 else
 	echo "  OpenCL...............: Detection overrided. GPU mining support DISABLED"
-	if test "x$avalon$bitforce$bitfury$icarus$ztex$modminer$bflsc" = xnonononononono; then
+	if test "x$avalon$bitforce$bitfury$icarus$ztex$modminer$bflsc$clam" = xnononononononono; then
 		AC_MSG_ERROR([No mining configured in])
 	fi
 	echo "  scrypt...............: Disabled (needs OpenCL)"
@@ -557,6 +568,12 @@ if test "x$ztex" = xyes; then
 	echo "  Ztex.FPGAs...........: Enabled"
 else
 	echo "  Ztex.FPGAs...........: Disabled"
+fi
+
+if test "x$clam" = xyes; then
+	echo "  Clam.ASICs...........: Enabled"
+else
+	echo "  Clam.ASICs...........: Disabled"
 fi
 
 echo
