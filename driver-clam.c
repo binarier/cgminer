@@ -1,6 +1,6 @@
 /*
+ * Copyright 2013 binarier <binarier@clambtc.com>
  * Copyright 2013 Con Kolivas <kernel@kolivas.org>
- * Copyright 2013 Li Chenjun <binarier@clambtc.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -71,7 +71,7 @@ static bool clam_read(int fd, struct timeval *timeout, uint32_t *result)
 			rc = read(fd, ((void *)&buf) + c, 4 - c);
 			if (rc == -1)
 			{
-				applog(LOG_ERR, "read clam error");
+				applog(LOG_ERR, "[Clam] read clam error");
 				return false;
 			}
 			c += rc;
@@ -79,13 +79,13 @@ static bool clam_read(int fd, struct timeval *timeout, uint32_t *result)
 		else if (rc == 0)
 		{
 			//timeout
-			applog(LOG_DEBUG, "read timeout ");
+			applog(LOG_DEBUG, "[Clam] read timeout ");
 			return false;
 		}
 		else
 		{
 			//timeout
-			applog(LOG_ERR, "read error : %d ", errno);
+			applog(LOG_ERR, "[Clam] read error : %d ", errno);
 			return false;
 		}
 	}
@@ -130,14 +130,14 @@ static void set_rts(const int fd)
 {
 	const HANDLE fh = (HANDLE)_get_osfhandle(fd);
 	if (!EscapeCommFunction(fh, SETRTS))
-		applog(LOG_ERR, "set rts failed");
+		applog(LOG_ERR, "[Clam] set rts failed");
 }
 
 static void clear_rts(int fd)
 {
 	const HANDLE fh = (HANDLE)_get_osfhandle(fd);
 	if (!EscapeCommFunction(fh, CLRRTS))
-		applog(LOG_ERR, "clear rts failed");
+		applog(LOG_ERR, "[Clam] clear rts failed");
 }
 
 #endif
@@ -171,7 +171,7 @@ static bool write_work(int fd, char *midstate, char *data)
 	}
 	if (unlikely(!clam_write(fd, data, 12)))
 	{
-		applog(LOG_ERR, "data write error");
+		applog(LOG_ERR, "[Clam] data write error");
 		return false;
 	}
 	return true;
@@ -202,13 +202,13 @@ static bool request_register(int fd, uint8_t chip_id, uint8_t address, bool read
 
 static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t value)
 {
-	applog(LOG_DEBUG, "write register [%02x]/[%02x] : %02x", chip_id, address, value);
+	applog(LOG_DEBUG, "[Clam] write register [%02x]/[%02x] : %02x", chip_id, address, value);
 	set_rts(fd);
 	//write chip id
 	if (unlikely(!clam_write(fd, &chip_id, 1)))
 	{
 		clear_rts(fd);
-		applog(LOG_ERR, "write chip_id [%02x] failed", chip_id);
+		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
 		return false;
 	}
 
@@ -217,7 +217,7 @@ static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t val
 	if (unlikely(!clam_write(fd, &address, 1)))
 	{
 		clear_rts(fd);
-		applog(LOG_ERR, "write register address %02x of chip %02x failed", address, chip_id);
+		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
 		return false;
 	}
 	if (unlikely(!clam_write(fd, &value, 1)))
@@ -237,7 +237,7 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 
 	memcpy(&timeout, &reg_read_timeout, sizeof(timeout));
 
-	applog(LOG_DEBUG, "read register [%02x]/[%02x]", chip_id, address);
+	applog(LOG_DEBUG, "[Clam] read register [%02x]/[%02x]", chip_id, address);
 	set_rts(fd);
 	if (unlikely(!request_register(fd, chip_id, address, true)))
 	{
@@ -248,7 +248,7 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 
 	if (unlikely(!clam_read(fd, &timeout, &data)))
 	{
-		applog(LOG_ERR, "read register value failed");
+		applog(LOG_ERR, "[Clam] read register value failed");
 		return false;
 	}
 	*result = (data >> ((3 - address & 0x3) * 8)) & 0xff;
@@ -257,13 +257,13 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 
 static bool set_core_range(int fd, uint8_t chip_id, int core, uint16_t low, uint16_t high)
 {
-	applog(LOG_DEBUG, "[%02x]-[%02x] scan range:%04x0000 - %04xffff", chip_id, core, low, high);
+	applog(LOG_DEBUG, "[Clam] [%02x]-[%02x] scan range:%04x0000 - %04xffff", chip_id, core, low, high);
 	if (!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4, low & 0xff) ||
 		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 1, low >> 8) ||
 		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 2, high & 0xff) ||
 		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 3, high >> 8))
 	{
-		applog(LOG_ERR, "[%02x]-[%02x] set scan range failed", chip_id, core);
+		applog(LOG_ERR, "[Clam] [%02x]-[%02x] set scan range failed", chip_id, core);
 		return false;
 	}
 
@@ -276,7 +276,7 @@ static bool set_core_range(int fd, uint8_t chip_id, int core, uint16_t low, uint
 
 static bool set_core_mask(int fd, uint8_t chip_id, uint8_t core_mask)
 {
-	applog(LOG_DEBUG, "[%02x] set core mask %02x", chip_id, core_mask);
+	applog(LOG_DEBUG, "[Clam] [%02x] set core mask %02x", chip_id, core_mask);
 	return write_register(fd, chip_id, CLAM_REG_CORE_MASK, core_mask);
 }
 
@@ -286,7 +286,7 @@ static bool set_pll_simple(const int fd, const int chip_id, int frequency)
 	uint8_t m = (frequency << CLAM_PLL_DEFAULT_OD) / (CLAM_PLL_DEFAULT_XIN / CLAM_PLL_DEFAULT_N);
 	uint8_t n = CLAM_PLL_DEFAULT_N;
 	uint8_t od = CLAM_PLL_DEFAULT_OD;
-	applog(LOG_DEBUG, "[Clam] set PLL M/N/OD value to %02x/%02x/%02x", m, n, od);
+	applog(LOG_DEBUG, "[Clam] [Clam] set PLL M/N/OD value to %02x/%02x/%02x", m, n, od);
 	if (unlikely(!write_register(fd, chip_id, CLAM_REG_PLL1, m)))
 		return false;
 	uint8_t pll2 = (n << 4) | ((od & 0x3) << 2);
@@ -308,7 +308,7 @@ static bool send_test_work(int fd)
 
 	if (unlikely(!write_work(fd, midstate, data)))
 	{
-		applog(LOG_ERR, "write test work failed");
+		applog(LOG_ERR, "[Clam] write test work failed");
 		return false;
 	}
 
@@ -317,12 +317,12 @@ static bool send_test_work(int fd)
 	memcpy(&timeout, &test_work_timeout, sizeof(timeout));
 	if (unlikely(!clam_read(fd, &timeout, &nonce)))
 	{
-		applog(LOG_ERR, "read test nonce failed");
+		applog(LOG_ERR, "[Clam] read test nonce failed");
 		return false;
 	}
 	if (nonce != golden_nonce)
 	{
-		applog(LOG_ERR, "returned nonce [%08x] do not mathch the golden nonce [%08x]", nonce, golden_nonce);
+		applog(LOG_ERR, "[Clam] returned nonce [%08x] do not mathch the golden nonce [%08x]", nonce, golden_nonce);
 		return false;
 	}
 	else
