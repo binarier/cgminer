@@ -501,8 +501,8 @@ static bool detect_cores(struct clam_info *info)
 			}
 			else
 			{
-				//functional core found
-				applog(LOG_NOTICE, "[Clam] functional core found:[%02x]/[%02x]", chip_id, j);
+				//funtional core found
+				applog(LOG_NOTICE, "[Clam] Funtional core found:[%02x]/[%02x]", chip_id, j);
 				info->core_count++;
 				info->core_map[chip_id] |= mask;
 			}
@@ -728,7 +728,7 @@ char *set_clam_noqueue(void)
 struct device_drv clam_drv = {
 	.drv_id = DRIVER_CLAM,
 	.dname = "clam",
-	.name = "CH",
+	.name = "CM",
 	.drv_detect = clam_detect,
 	.hash_work = hash_queued_work,
 	.scanwork = clam_scanwork,
