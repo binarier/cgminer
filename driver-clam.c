@@ -142,7 +142,7 @@ static void clear_rts(int fd)
 
 #endif
 
-static bool write_work(int fd, char *midstate, char *data)
+static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
 {
 	char *hex_midstate;
 	char *hex_data;
@@ -153,7 +153,7 @@ static bool write_work(int fd, char *midstate, char *data)
 	free(hex_data);
 
 	//reverse bye order according to chip spec
-	char tm[32], td[12];
+	unsigned char tm[32], td[12];
 	int i;
 	for (i=0;i<32;i++)
 		tm[i] = midstate[31-i];
@@ -250,7 +250,7 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 		applog(LOG_ERR, "read register value failed");
 		return false;
 	}
-	*result = (data >> ((3 - address & 0x3) * 8)) & 0xff;
+	*result = (data >> ((3 - (address & 0x3)) * 8)) & 0xff;
 	return true;
 }
 
@@ -407,7 +407,6 @@ static bool detect_cores(struct clam_info *info)
 	{
 		//send read chip_id reg command
 		set_rts(fd);
-		uint32_t chip_id;
 		if (unlikely(!request_register(fd, i, CLAM_REG_CHIP_ID)))
 		{
 			applog(LOG_ERR, "[Clam] send read chip_id command failed [%02x]", i);
@@ -425,7 +424,7 @@ static bool detect_cores(struct clam_info *info)
 		uint32_t result;
 		if (!clam_read(fd, &tv_timeout, &result))
 			break;
-		uint8_t chip_id = (result >> ((3 - CLAM_REG_CHIP_ID & 0x3) * 8)) & 0xff;
+		uint8_t chip_id = (result >> ((3 - (CLAM_REG_CHIP_ID & 0x3)) * 8)) & 0xff;
 		chip_ids[info->chip_count++] = chip_id;
 		applog(LOG_NOTICE, "[Clam] Chip 0x%02x found!", chip_id);
 	}
