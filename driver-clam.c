@@ -1,6 +1,6 @@
 /*
+ * Copyright 2013 binarier <binarier@clambtc.com>
  * Copyright 2013 Con Kolivas <kernel@kolivas.org>
- * Copyright 2013 Li Chenjun <binarier@clambtc.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -35,8 +35,8 @@
 
 struct device_drv clam_drv;
 
-// used for funtional core detection
-// modified from driver-icarus.c
+// used for functional core detection
+// adopted from driver-icarus.c
 // Block 171874 nonce = (0xa2870100) = 0x000187a2
 const char *golden_midstate = "4a548fe471fa3a9a1371144556c3f64d2500b4826008fe4bbf7698c94eba7946";
 const char *golden_data = "ce22a72f4f6726141a0b3287";
@@ -102,7 +102,7 @@ static bool clam_write(int fd, const void *data, int size)
 	{
 		if (write(fd, data+i, 1)!=1)
 			return false;
-		tcdrain(fd);
+		tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
 	}
 	return true;
 }
@@ -142,7 +142,7 @@ static void clear_rts(int fd)
 
 #endif
 
-static bool write_work(int fd, char *midstate, char *data)
+static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
 {
 	char *hex_midstate;
 	char *hex_data;
@@ -152,8 +152,8 @@ static bool write_work(int fd, char *midstate, char *data)
 	free(hex_midstate);
 	free(hex_data);
 
-	//reverse order due to chip spec
-	char tm[32], td[12];
+	//reverse bye order according to chip spec
+	unsigned char tm[32], td[12];
 	int i;
 	for (i=0;i<32;i++)
 		tm[i] = midstate[31-i];
@@ -177,38 +177,15 @@ static bool write_work(int fd, char *midstate, char *data)
 	return true;
 }
 
-static bool request_register(int fd, uint8_t chip_id, uint8_t address, bool read)
-{
-	//write chip id
-	if (unlikely(!clam_write(fd, &chip_id, 1)))
-	{
-		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
-		return false;
-	}
-
-	address <<= 1;
-	if (read)
-		address &= 0xfe;	//read mode
-	else
-		address |= 0x01;	//write mode
-
-	if (unlikely(!clam_write(fd, &address, 1)))
-	{
-		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
-		return false;
-	}
-	return true;
-}
-
 static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t value)
 {
-	applog(LOG_DEBUG, "write register [%02x]/[%02x] : %02x", chip_id, address, value);
+	applog(LOG_DEBUG, "[Clam] write register [%02x]/[%02x] : %02x", chip_id, address, value);
 	set_rts(fd);
 	//write chip id
 	if (unlikely(!clam_write(fd, &chip_id, 1)))
 	{
 		clear_rts(fd);
-		applog(LOG_ERR, "write chip_id [%02x] failed", chip_id);
+		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
 		return false;
 	}
 
@@ -217,16 +194,38 @@ static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t val
 	if (unlikely(!clam_write(fd, &address, 1)))
 	{
 		clear_rts(fd);
-		applog(LOG_ERR, "write register address %02x of chip %02x failed", address, chip_id);
+		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
 		return false;
 	}
 	if (unlikely(!clam_write(fd, &value, 1)))
 	{
 		clear_rts(fd);
-		applog(LOG_ERR, "write register value %02x to %02x/%02x failed", value, chip_id, address);
+		applog(LOG_ERR, "[Clam] write register value %02x to %02x/%02x failed", value, chip_id, address);
 		return false;
 	}
 	clear_rts(fd);
+	return true;
+}
+
+static bool request_register(int fd, uint8_t chip_id, uint8_t address)
+{
+	//register read access sequence
+	//extracted this function from read_register to support chip detect operation
+
+	//write chip id
+	if (unlikely(!clam_write(fd, &chip_id, 1)))
+	{
+		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
+		return false;
+	}
+
+	address <<= 1;
+
+	if (unlikely(!clam_write(fd, &address, 1)))
+	{
+		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
+		return false;
+	}
 	return true;
 }
 
@@ -239,7 +238,7 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 
 	applog(LOG_DEBUG, "read register [%02x]/[%02x]", chip_id, address);
 	set_rts(fd);
-	if (unlikely(!request_register(fd, chip_id, address, true)))
+	if (unlikely(!request_register(fd, chip_id, address)))
 	{
 		clear_rts(fd);
 		return false;
@@ -251,33 +250,8 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 		applog(LOG_ERR, "read register value failed");
 		return false;
 	}
-	*result = (data >> ((3 - address & 0x3) * 8)) & 0xff;
+	*result = (data >> ((3 - (address & 0x3)) * 8)) & 0xff;
 	return true;
-}
-
-static bool set_core_range(int fd, uint8_t chip_id, int core, uint16_t low, uint16_t high)
-{
-	applog(LOG_DEBUG, "[%02x]-[%02x] scan range:%04x0000 - %04xffff", chip_id, core, low, high);
-	if (!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4, low & 0xff) ||
-		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 1, low >> 8) ||
-		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 2, high & 0xff) ||
-		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 3, high >> 8))
-	{
-		applog(LOG_ERR, "[%02x]-[%02x] set scan range failed", chip_id, core);
-		return false;
-	}
-
-	if (unlikely(!write_register(fd, chip_id, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
-	{
-		return false;
-	}
-	return true;
-}
-
-static bool set_core_mask(int fd, uint8_t chip_id, uint8_t core_mask)
-{
-	applog(LOG_DEBUG, "[%02x] set core mask %02x", chip_id, core_mask);
-	return write_register(fd, chip_id, CLAM_REG_CORE_MASK, core_mask);
 }
 
 static bool set_pll_simple(const int fd, const int chip_id, int frequency)
@@ -308,7 +282,7 @@ static bool send_test_work(int fd)
 
 	if (unlikely(!write_work(fd, midstate, data)))
 	{
-		applog(LOG_ERR, "write test work failed");
+		applog(LOG_ERR, "[Clam] write test work failed");
 		return false;
 	}
 
@@ -317,12 +291,12 @@ static bool send_test_work(int fd)
 	memcpy(&timeout, &test_work_timeout, sizeof(timeout));
 	if (unlikely(!clam_read(fd, &timeout, &nonce)))
 	{
-		applog(LOG_ERR, "read test nonce failed");
+		applog(LOG_ERR, "[Clam] read test nonce failed");
 		return false;
 	}
 	if (nonce != golden_nonce)
 	{
-		applog(LOG_ERR, "returned nonce [%08x] do not mathch the golden nonce [%08x]", nonce, golden_nonce);
+		applog(LOG_ERR, "[Clam] returned nonce [%08x] do not mathch the golden nonce [%08x]", nonce, golden_nonce);
 		return false;
 	}
 	else
@@ -331,6 +305,31 @@ static bool send_test_work(int fd)
 	}
 
 	return true;
+}
+
+static bool set_core_range(int fd, uint8_t chip_id, int core, uint16_t low, uint16_t high)
+{
+	applog(LOG_DEBUG, "[%02x]-[%02x] scan range:%04x0000 - %04xffff", chip_id, core, low, high);
+	if (!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4, low & 0xff) ||
+		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 1, low >> 8) ||
+		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 2, high & 0xff) ||
+		!write_register(fd, chip_id, CLAM_REG_CORE0_RANGE_LOW + core * 4 + 3, high >> 8))
+	{
+		applog(LOG_ERR, "[%02x]-[%02x] set scan range failed", chip_id, core);
+		return false;
+	}
+
+	if (unlikely(!write_register(fd, chip_id, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
+	{
+		return false;
+	}
+	return true;
+}
+
+static bool set_core_mask(int fd, uint8_t chip_id, uint8_t core_mask)
+{
+	applog(LOG_DEBUG, "[%02x] set core mask %02x", chip_id, core_mask);
+	return write_register(fd, chip_id, CLAM_REG_CORE_MASK, core_mask);
 }
 
 static bool assign_cores(struct clam_info *info)
@@ -393,7 +392,12 @@ static bool detect_cores(struct clam_info *info)
 
 	//loop all the chips as independent and reset all
 
-	if (unlikely(!write_register(fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_LOOP_DOWN_M|CLAM_GC_LOOP_DOWN_S|CLAM_GC_LOOP_UP_M|CLAM_GC_LOOP_UP_S|CLAM_GC_RESET)))
+	if (unlikely(!write_register(fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL,
+			CLAM_GC_LOOP_DOWN_M|
+			CLAM_GC_LOOP_DOWN_S|
+			CLAM_GC_LOOP_UP_M|
+			CLAM_GC_LOOP_UP_S|
+			CLAM_GC_RESET)))		//all loop bits
 	{
 		applog(LOG_ERR, "[Clam] reset all for detection failed");
 		return false;
@@ -403,8 +407,7 @@ static bool detect_cores(struct clam_info *info)
 	{
 		//send read chip_id reg command
 		set_rts(fd);
-		uint32_t chip_id;
-		if (unlikely(!request_register(fd, i, CLAM_REG_CHIP_ID, true)))
+		if (unlikely(!request_register(fd, i, CLAM_REG_CHIP_ID)))
 		{
 			applog(LOG_ERR, "[Clam] send read chip_id command failed [%02x]", i);
 			clear_rts(fd);
@@ -421,7 +424,7 @@ static bool detect_cores(struct clam_info *info)
 		uint32_t result;
 		if (!clam_read(fd, &tv_timeout, &result))
 			break;
-		uint8_t chip_id = (result >> ((3 - CLAM_REG_CHIP_ID & 0x3) * 8)) & 0xff;
+		uint8_t chip_id = (result >> ((3 - (CLAM_REG_CHIP_ID & 0x3)) * 8)) & 0xff;
 		chip_ids[info->chip_count++] = chip_id;
 		applog(LOG_NOTICE, "[Clam] Chip 0x%02x found!", chip_id);
 	}
