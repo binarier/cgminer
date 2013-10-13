@@ -44,6 +44,10 @@
 #define CLAM_GC_LOOP_DOWN_M		0x40		//Down loop for DN_MREQ and DN_MACK
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
+#ifdef WIN32
+#error "Windows is not supported by Clam driver yet."
+#endif
+
 struct clam_info
 {
 	int chip_count;

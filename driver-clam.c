@@ -16,15 +16,12 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
-
-#include "logging.h"
-
-#ifndef WIN32
 #include <termios.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#endif
+
+#include "logging.h"
 
 #include "miner.h"
 #include "fpgautils.h"
@@ -107,7 +104,6 @@ static bool clam_write(int fd, const void *data, int size)
 	return true;
 }
 
-#ifndef WIN32
 static void set_rts(int fd)
 {
 	tcdrain(fd);
@@ -125,22 +121,6 @@ static void clear_rts(int fd)
 	bits |= TIOCM_RTS;
 	ioctl(fd, TIOCMSET, &bits);
 }
-#else
-static void set_rts(const int fd)
-{
-	const HANDLE fh = (HANDLE)_get_osfhandle(fd);
-	if (!EscapeCommFunction(fh, SETRTS))
-		applog(LOG_ERR, "set rts failed");
-}
-
-static void clear_rts(int fd)
-{
-	const HANDLE fh = (HANDLE)_get_osfhandle(fd);
-	if (!EscapeCommFunction(fh, CLRRTS))
-		applog(LOG_ERR, "clear rts failed");
-}
-
-#endif
 
 static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
 {
