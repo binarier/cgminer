@@ -23,7 +23,7 @@
 #define CLAM_DEFAULT_CLOCK		((CLAM_PLL_DEFAULT_XIN * CLAM_PLL_DEFAULT_M / CLAM_PLL_DEFAULT_N) >> CLAM_PLL_DEFAULT_OD)
 #define CLAM_MAX_CLOCK			750
 //#define CLAM_MIN_CLOCK			250
-#define CLAM_MIN_CLOCK			50		//FIXME only for FPGA verification
+#define CLAM_MIN_CLOCK			50		//FIXME FPGA verification only
 
 #define CLAM_CHIP_ID_ALL				0xff		//to all chips
 
