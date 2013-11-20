@@ -579,15 +579,21 @@ static void clam_detect(void)
 static int64_t clam_scanwork(struct thr_info *thr)
 {
 	struct clam_info *info = thr->cgpu->device_data;
-	struct timeval timeout = {0};
+	struct timeval tv_timeout;
 
-	uint32_t max_usec = 0xffffffff / info->core_count / opt_clam_clock ;
+	int64_t us_timeout = 0xffffffff / info->core_count / opt_clam_clock ;	//max timeout
 
-	timeout.tv_sec = max_usec / 1000000;
-	timeout.tv_usec = max_usec % 1000000;
+	//calc the actual timeout time
+	struct timeval tv_now;
+	cgtime(&tv_now);
+	int64_t passed = (int64_t)us_tdiff(&tv_now, &info->tv_work_start);
+
+	us_timeout -= passed;
+
+	us_to_timeval(&tv_timeout, us_timeout);
 
 	uint32_t nonce;
-	if (unlikely(!clam_read(info->fd, &timeout, &nonce)))
+	if (unlikely(!clam_read(info->fd, &tv_timeout, &nonce)))
 	{
 		applog(LOG_NOTICE, "[Clam] read nonce timeout or error, reset all");
 
@@ -607,6 +613,11 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		work_completed(thr->cgpu, info->current_work);
 		info->current_work = info->queued_work;
 		info->queued_work = NULL;
+		if (info->current_work != NULL)
+		{
+			//queued work
+			cgtime(&(info->tv_work_start));
+		}
 
 		//estimate the hashes
 		int range = 0x10000/info->core_count;
@@ -641,6 +652,7 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 		if (!info->current_work)
 		{
 			info->current_work = work;
+			cgtime(&(info->tv_work_start));
 			return false;
 		}
 		else

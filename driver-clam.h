@@ -59,6 +59,9 @@ struct clam_info
 	//track two works on device
 	struct work *current_work;
 	struct work *queued_work;
+
+	//track last work finish time
+	struct timeval tv_work_start;
 };
 
 char *set_clam_clock(char *arg);
