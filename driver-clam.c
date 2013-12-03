@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "logging.h"
 
@@ -28,6 +29,105 @@
 #include "uthash.h"
 
 #include "driver-clam.h"
+
+#define RASPBERRYPI
+
+#ifdef RASPBERRYPI
+
+#define PAGE_SIZE (4*1024)
+#define BLOCK_SIZE (4*1024)
+#define BCM2708_PERI_BASE        0x20000000
+#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
+
+
+// I/O access
+volatile unsigned *gpio;
+
+
+#define GPIO_SET *(gpio+7)  // sets   bits which are 1 ignores bits which are 0
+#define GPIO_CLR *(gpio+10) // clears bits which are 1 ignores bits which are 0
+
+
+int get_3b (int g)
+{
+   return (gpio[g/10] >> ((g%10)*3)) & 7;
+}
+
+void set_3b (int g, int v)
+{
+   gpio[g/10] = (gpio[g/10] & ~(7 << ((g%10)*3)))  |
+                        ((v & 7) << ((g%10) *3));
+}
+
+void gpio_set (int g)
+{
+   gpio[7 + (g/32)] = 1 << (g %32);
+}
+
+void gpio_clr (int g)
+{
+   gpio[10 + (g/32)] = 1 << (g %32);
+}
+
+int gpio_get (int g)
+{
+   return (gpio[0xd + (g/32)] >> (g % 32)) & 1;
+}
+
+
+
+enum gpio_funcs {GP_INP,  GP_OUT,  GP_ALT5, GP_ALT4,
+                   GP_ALT0, GP_ALT1, GP_ALT2, GP_ALT3};
+
+
+//
+// Set up a memory region to access GPIO
+//
+volatile unsigned int *setup_io()
+{
+   int  mem_fd;
+   char *gpio_mem, *gpio_map;
+
+
+   /* open /dev/mem */
+   if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
+      printf("can't open /dev/mem \n");
+      exit (-1);
+   }
+
+   /* mmap GPIO */
+
+   // Allocate MAP block
+   if ((gpio_mem = malloc(BLOCK_SIZE + (PAGE_SIZE-1))) == NULL) {
+      printf("allocation error \n");
+      exit (-1);
+   }
+
+   // Make sure pointer is on 4K boundary
+   if ((unsigned long)gpio_mem % PAGE_SIZE)
+     gpio_mem += PAGE_SIZE - ((unsigned long)gpio_mem % PAGE_SIZE);
+
+   // Now map it
+   gpio_map = mmap(
+      (caddr_t)gpio_mem,
+      BLOCK_SIZE,
+      PROT_READ|PROT_WRITE,
+      MAP_SHARED|MAP_FIXED,
+      mem_fd,
+      GPIO_BASE
+   );
+
+   if ((long)gpio_map < 0) {
+      printf("mmap error %ld\n", (long)gpio_map);
+      exit (-1);
+   }
+
+   close (mem_fd);
+
+   // Always use volatile pointer!
+   return (volatile unsigned *)gpio_map;
+} // setup_io
+#endif
 
 
 struct device_drv clam_drv;
@@ -99,27 +199,37 @@ static bool clam_write(int fd, const void *data, int size)
 	{
 		if (write(fd, data+i, 1)!=1)
 			return false;
-		tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
+//		if ((i + 1) % 8 == 0)
+			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
 	}
+	tcdrain(fd);
 	return true;
 }
 
 static void set_rts(int fd)
 {
 	tcdrain(fd);
+#ifdef RASPBERRYPI
+	gpio_set(17);
+#else
 	int bits;
 	ioctl(fd, TIOCMGET, &bits);
 	bits &= ~TIOCM_RTS;
 	ioctl(fd, TIOCMSET, &bits);
+#endif
 }
 
 static void clear_rts(int fd)
 {
 	tcdrain(fd);		//buffer must be empty before rts being cleared
+#ifdef RASPBERRYPI
+	gpio_clr(17);
+#else
 	int bits;
 	ioctl(fd, TIOCMGET, &bits);
 	bits |= TIOCM_RTS;
 	ioctl(fd, TIOCMSET, &bits);
+#endif
 }
 
 static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
@@ -519,6 +629,11 @@ static bool detect_cores(struct clam_info *info)
 
 static bool clam_detect_one(const char *devpath)
 {
+#ifdef RASPBERRYPI
+	gpio = setup_io();
+	set_3b(17, GP_OUT);
+#endif
+
 	applog(LOG_DEBUG, "[Clam] detecting device on serial %s", devpath);
 
 	struct clam_info *info = calloc(1, sizeof(*info));
