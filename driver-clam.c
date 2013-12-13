@@ -30,7 +30,7 @@
 
 #include "driver-clam.h"
 
-#define RASPBERRYPI
+//#define RASPBERRYPI
 
 #ifdef RASPBERRYPI
 
@@ -458,6 +458,8 @@ static bool reset_all(struct clam_info *info)
 		applog(LOG_ERR, "[Clam] init range all failed");
 		return false;
 	}
+
+	info->last_nonce = 0;
 
 	//re-set bypass
 	int i;
