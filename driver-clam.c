@@ -199,7 +199,7 @@ static bool clam_write(int fd, const void *data, int size)
 	{
 		if (write(fd, data+i, 1)!=1)
 			return false;
-//		if ((i + 1) % 8 == 0)
+		if ((i + 1) % 22 == 0)
 			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
 	}
 	tcdrain(fd);
@@ -238,7 +238,7 @@ static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
 	char *hex_data;
 	hex_midstate = bin2hex(midstate, 32);
 	hex_data = bin2hex(data, 12);
-	applog(LOG_NOTICE, "[Clam] send work : midstate[%s], data[%s]", hex_midstate, hex_data);
+	applog(LOG_DEBUG, "[Clam] send work : midstate[%s], data[%s]", hex_midstate, hex_data);
 	free(hex_midstate);
 	free(hex_data);
 
@@ -272,7 +272,7 @@ static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t val
 	applog(LOG_DEBUG, "[Clam] write register [%02x]/[%02x] : %02x", chip_id, address, value);
 	set_rts(fd);
 	//write chip id
-	if (unlikely(!clam_write(fd, &chip_id, 1)))
+	if (unlikely(!write(fd, &chip_id, 1)))
 	{
 		clear_rts(fd);
 		applog(LOG_ERR, "[Clam] write chip_id [%02x] failed", chip_id);
@@ -281,18 +281,19 @@ static bool write_register(int fd, uint8_t chip_id, uint8_t address, uint8_t val
 
 	address = (address << 1) | 0x01;	//write mode;
 
-	if (unlikely(!clam_write(fd, &address, 1)))
+	if (unlikely(!write(fd, &address, 1)))
 	{
 		clear_rts(fd);
 		applog(LOG_ERR, "[Clam] write register address %02x of chip %02x failed", address, chip_id);
 		return false;
 	}
-	if (unlikely(!clam_write(fd, &value, 1)))
+	if (unlikely(!write(fd, &value, 1)))
 	{
 		clear_rts(fd);
 		applog(LOG_ERR, "[Clam] write register value %02x to %02x/%02x failed", value, chip_id, address);
 		return false;
 	}
+	tcdrain(fd);
 	clear_rts(fd);
 	return true;
 }
@@ -347,9 +348,15 @@ static bool read_register(int fd, uint8_t chip_id, uint8_t address, uint8_t *res
 static bool set_pll_simple(const int fd, const int chip_id, int frequency)
 {
 	//default method to modify only M value
-	uint8_t m = (frequency << CLAM_PLL_DEFAULT_OD) / (CLAM_PLL_DEFAULT_XIN / CLAM_PLL_DEFAULT_N);
-	uint8_t n = CLAM_PLL_DEFAULT_N;
 	uint8_t od = CLAM_PLL_DEFAULT_OD;
+	uint8_t n = CLAM_PLL_DEFAULT_N;
+
+	od = 2;
+	n = 1;
+	if (frequency > 360)
+		od = 1;
+
+	uint8_t m = (frequency << od) / (CLAM_PLL_DEFAULT_XIN / n);
 	applog(LOG_DEBUG, "[Clam] set PLL M/N/OD value to %02x/%02x/%02x", m, n, od);
 	if (unlikely(!write_register(fd, chip_id, CLAM_REG_PLL1, m)))
 		return false;
@@ -386,7 +393,7 @@ static bool send_test_work(int fd)
 	}
 	if (nonce != golden_nonce)
 	{
-		applog(LOG_ERR, "[Clam] returned nonce [%08x] do not mathch the golden nonce [%08x]", nonce, golden_nonce);
+		applog(LOG_ERR, "[Clam] returned nonce [%08x] do not match the golden nonce [%08x]", nonce, golden_nonce);
 		return false;
 	}
 	else
@@ -650,11 +657,8 @@ static bool clam_detect_one(const char *devpath)
 	info->fd = fd;
 	clear_rts(fd);
 
-	if (opt_clam_clock != CLAM_DEFAULT_CLOCK)
-	{
-		if (unlikely(!set_pll_simple(fd, CLAM_CHIP_ID_ALL, opt_clam_clock)))
-			return false;
-	}
+	if (unlikely(!set_pll_simple(fd, CLAM_CHIP_ID_ALL, opt_clam_clock)))
+		return false;
 
 	if (unlikely(!detect_cores(info)))
 		goto failed;
@@ -712,7 +716,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	uint32_t nonce;
 	if (unlikely(!clam_read(info->fd, &tv_timeout, &nonce)))
 	{
-		applog(LOG_NOTICE, "[Clam] read nonce timeout or error, reset all");
+		applog(LOG_DEBUG, "[Clam] read nonce timeout or error, reset all");
 
 		thr->work_restart = true;
 
@@ -720,10 +724,10 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	}
 	else
 	{
-		applog(LOG_NOTICE, "[Clam] nonce found [%08x], for midstate[%08x]", nonce, *((uint32_t *)info->current_work->midstate));
+		applog(LOG_DEBUG, "[Clam] nonce found [%08x], for midstate[%08x]", nonce, *((uint32_t *)info->current_work->midstate));
 		if (!submit_nonce(thr, info->current_work, nonce))
 		{
-			applog(LOG_ERR, "[Clam] HW error, reset all");
+			applog(LOG_DEBUG, "[Clam] HW error, reset all");
 			thr->work_restart = true;
 		}
 
@@ -787,7 +791,7 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 
 static void clam_flush_work(struct cgpu_info *cgpu)
 {
-	applog(LOG_NOTICE, "[Clam] flush work and reset all");
+	applog(LOG_DEBUG, "[Clam] flush work and reset all");
 	//clean all the work on device
 	struct clam_info *info = cgpu->device_data;
 
