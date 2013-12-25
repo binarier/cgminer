@@ -332,13 +332,13 @@ else
 	])
 fi
 
-if test x$avalon$bitforce$bitfury$modminer$bflsc$icarus != xnononononono; then
+if test x$avalon$bitforce$bitfury$modminer$bflsc$icarus$clam != xnonononononono; then
 	want_usbutils=true
 else
 	want_usbutils=false
 fi
 
-AM_CONDITIONAL([NEED_FPGAUTILS], [test x$modminer$ztex$clam != xnonono])
+AM_CONDITIONAL([NEED_FPGAUTILS], [test x$modminer$ztex != xnono])
 AM_CONDITIONAL([WANT_USBUTILS], [test x$want_usbutils != xfalse])
 AM_CONDITIONAL([HAVE_CURSES], [test x$curses = xyes])
 AM_CONDITIONAL([HAVE_WINDOWS], [test x$have_win32 = xtrue])

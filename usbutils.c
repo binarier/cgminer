@@ -70,6 +70,10 @@
 #define DRV_BITFURY 8
 #endif
 
+#ifdef USE_CLAM
+#define DRV_CLAM 9
+#endif
+
 #define DRV_LAST -1
 
 #define USB_CONFIG 1
@@ -166,6 +170,17 @@ static struct usb_epinfo ava_epinfos[] = {
 
 static struct usb_intinfo ava_ints[] = {
 	USB_EPS(0, ava_epinfos)
+};
+#endif
+
+#ifdef USE_CLAM
+static struct usb_epinfo clam_epinfos[] = {
+	{ LIBUSB_TRANSFER_TYPE_BULK,	64,	EPI(1), 0, 0, 0 },
+	{ LIBUSB_TRANSFER_TYPE_BULK,	64,	EPO(2), 0, 0, 0 }
+};
+
+static struct usb_intinfo clam_ints[] = {
+		USB_EPS(0, clam_epinfos)
 };
 #endif
 
@@ -403,6 +418,18 @@ static struct usb_find_devices find_dev[] = {
 		.intinfo_count = 0,
 		.intinfos = NULL },
 #endif
+#ifdef USE_CLAM
+	{
+		.drv = 9,
+		.name = "CM",
+		.ident = IDENT_CLAM,
+		.idVendor = IDVENDOR_FTDI,
+		.idProduct = 0x6001,
+		.config = 1,
+		.timeout = 200,
+		.latency = 10,
+		INTINFO(clam_ints) },
+#endif
 	{ DRV_LAST, NULL, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, NULL }
 };
 
@@ -428,6 +455,10 @@ extern struct device_drv icarus_drv;
 
 #ifdef USE_AVALON
 extern struct device_drv avalon_drv;
+#endif
+
+#ifdef USE_CLAM
+extern struct device_drv clam_drv;
 #endif
 
 #define STRBUFLEN 256
@@ -1927,6 +1958,10 @@ static struct usb_find_devices *usb_check(__maybe_unused struct device_drv *drv,
 	if (drv->drv_id == DRIVER_AVALON)
 		return usb_check_each(DRV_AVALON, drv, dev);
 #endif
+#ifdef USE_CLAM
+	if (drv->drv_id == DRIVER_CLAM)
+		return usb_check_each(DRV_CLAM, drv, dev);
+#endif
 
 	return NULL;
 }
@@ -3157,6 +3192,7 @@ void usb_cleanup()
 			case DRIVER_MODMINER:
 			case DRIVER_ICARUS:
 			case DRIVER_AVALON:
+			case DRIVER_CLAM:
 				wr_lock(cgpu->usbinfo.devlock);
 				release_cgpu(cgpu);
 				wr_unlock(cgpu->usbinfo.devlock);
@@ -3314,6 +3350,12 @@ void usb_initialise()
 #ifdef USE_AVALON
 				if (!found && strcasecmp(ptr, avalon_drv.name) == 0) {
 					drv_count[avalon_drv.drv_id].limit = lim;
+					found = true;
+				}
+#endif
+#ifdef USE_CLAM
+				if (!found && strcasecmp(ptr, clam_drv.name) == 0) {
+					drv_count[clam_drv.drv_id].limit = lim;
 					found = true;
 				}
 #endif

@@ -150,7 +150,8 @@ enum sub_ident {
 	IDENT_LLT,
 	IDENT_CMR1,
 	IDENT_CMR2,
-	IDENT_ZTX
+	IDENT_ZTX,
+	IDENT_CLAM
 };
 
 struct usb_find_devices {
@@ -336,7 +337,9 @@ struct cg_usb_info {
 	USB_ADD_COMMAND(C_BF1_GETRES, "BF1GetResults") \
 	USB_ADD_COMMAND(C_BF1_FLUSH, "BF1Flush") \
 	USB_ADD_COMMAND(C_BF1_IFLUSH, "BF1InterruptFlush") \
-	USB_ADD_COMMAND(C_BF1_IDENTIFY, "BF1Identify")
+	USB_ADD_COMMAND(C_BF1_IDENTIFY, "BF1Identify") \
+	USB_ADD_COMMAND(C_CLAM_WRITE_WORK, "CMWriteWork") \
+	USB_ADD_COMMAND(C_CLAM_READ_NONCE, "CMReadNonce")
 
 /* Create usb_cmds enum from USB_PARSE_COMMANDS macro */
 #define USB_ADD_COMMAND(X, Y) X,
