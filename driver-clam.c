@@ -30,106 +30,6 @@
 
 #include "driver-clam.h"
 
-//#define RASPBERRYPI
-
-#ifdef RASPBERRYPI
-
-#define PAGE_SIZE (4*1024)
-#define BLOCK_SIZE (4*1024)
-#define BCM2708_PERI_BASE        0x20000000
-#define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
-
-
-// I/O access
-volatile unsigned *gpio;
-
-
-#define GPIO_SET *(gpio+7)  // sets   bits which are 1 ignores bits which are 0
-#define GPIO_CLR *(gpio+10) // clears bits which are 1 ignores bits which are 0
-
-
-int get_3b (int g)
-{
-   return (gpio[g/10] >> ((g%10)*3)) & 7;
-}
-
-void set_3b (int g, int v)
-{
-   gpio[g/10] = (gpio[g/10] & ~(7 << ((g%10)*3)))  |
-                        ((v & 7) << ((g%10) *3));
-}
-
-void gpio_set (int g)
-{
-   gpio[7 + (g/32)] = 1 << (g %32);
-}
-
-void gpio_clr (int g)
-{
-   gpio[10 + (g/32)] = 1 << (g %32);
-}
-
-int gpio_get (int g)
-{
-   return (gpio[0xd + (g/32)] >> (g % 32)) & 1;
-}
-
-
-
-enum gpio_funcs {GP_INP,  GP_OUT,  GP_ALT5, GP_ALT4,
-                   GP_ALT0, GP_ALT1, GP_ALT2, GP_ALT3};
-
-
-//
-// Set up a memory region to access GPIO
-//
-volatile unsigned int *setup_io()
-{
-   int  mem_fd;
-   char *gpio_mem, *gpio_map;
-
-
-   /* open /dev/mem */
-   if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
-      printf("can't open /dev/mem \n");
-      exit (-1);
-   }
-
-   /* mmap GPIO */
-
-   // Allocate MAP block
-   if ((gpio_mem = malloc(BLOCK_SIZE + (PAGE_SIZE-1))) == NULL) {
-      printf("allocation error \n");
-      exit (-1);
-   }
-
-   // Make sure pointer is on 4K boundary
-   if ((unsigned long)gpio_mem % PAGE_SIZE)
-     gpio_mem += PAGE_SIZE - ((unsigned long)gpio_mem % PAGE_SIZE);
-
-   // Now map it
-   gpio_map = mmap(
-      (caddr_t)gpio_mem,
-      BLOCK_SIZE,
-      PROT_READ|PROT_WRITE,
-      MAP_SHARED|MAP_FIXED,
-      mem_fd,
-      GPIO_BASE
-   );
-
-   if ((long)gpio_map < 0) {
-      printf("mmap error %ld\n", (long)gpio_map);
-      exit (-1);
-   }
-
-   close (mem_fd);
-
-   // Always use volatile pointer!
-   return (volatile unsigned *)gpio_map;
-} // setup_io
-#endif
-
-
 struct device_drv clam_drv;
 
 // used for functional core detection
@@ -145,6 +45,21 @@ static struct timeval test_work_timeout = {1, 0};	//0x187a2 should come out very
 int opt_clam_clock = CLAM_DEFAULT_CLOCK;
 int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
 bool opt_clam_use_queue = true;
+
+static bool hard_reset(int fd)
+{
+        int bits;
+        ioctl(fd, TIOCMGET, &bits);
+
+        bits |= TIOCM_DTR;
+        ioctl(fd, TIOCMSET, &bits);
+
+
+        bits &= ~TIOCM_DTR;
+        ioctl(fd, TIOCMSET, &bits);
+
+        return true;
+}
 
 static bool clam_read(int fd, struct timeval *timeout, uint32_t *result)
 {
@@ -199,37 +114,29 @@ static bool clam_write(int fd, const void *data, int size)
 	{
 		if (write(fd, data+i, 1)!=1)
 			return false;
-		if ((i + 1) % 22 == 0)
-			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
+//		if ((i + 1) % 8 == 0)
+//			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
 	}
-	tcdrain(fd);
+	//tcdrain(fd);
 	return true;
 }
 
 static void set_rts(int fd)
 {
 	tcdrain(fd);
-#ifdef RASPBERRYPI
-	gpio_set(17);
-#else
 	int bits;
 	ioctl(fd, TIOCMGET, &bits);
 	bits &= ~TIOCM_RTS;
 	ioctl(fd, TIOCMSET, &bits);
-#endif
 }
 
 static void clear_rts(int fd)
 {
 	tcdrain(fd);		//buffer must be empty before rts being cleared
-#ifdef RASPBERRYPI
-	gpio_clr(17);
-#else
 	int bits;
 	ioctl(fd, TIOCMGET, &bits);
 	bits |= TIOCM_RTS;
 	ioctl(fd, TIOCMSET, &bits);
-#endif
 }
 
 static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
@@ -244,24 +151,18 @@ static bool write_work(int fd, unsigned char *midstate, unsigned char *data)
 
 	//reverse bye order according to chip spec
 	unsigned char tm[32], td[12];
+	unsigned char buf[32+12];
 	int i;
 	for (i=0;i<32;i++)
-		tm[i] = midstate[31-i];
+		buf[i] = midstate[31-i];
 	for (i=0;i<12;i++)
-		td[i] = data[11-i];
-	midstate = tm;
-	data = td;
+		buf[32 + i] = data[11-i];
 
 	clear_rts(fd);
 
-	if (unlikely(!clam_write(fd, midstate, 32)))
+	if (unlikely(!clam_write(fd, buf, sizeof(buf))))
 	{
-		applog(LOG_ERR, "[Clam] midstate write error");
-		return false;
-	}
-	if (unlikely(!clam_write(fd, data, 12)))
-	{
-		applog(LOG_ERR, "data write error");
+		applog(LOG_ERR, "[Clam] work write error");
 		return false;
 	}
 	return true;
@@ -352,7 +253,7 @@ static bool set_pll_simple(const int fd, const int chip_id, int frequency)
 	uint8_t n = CLAM_PLL_DEFAULT_N;
 
 	od = 2;
-	n = 1;
+	n = 2;
 	if (frequency > 360)
 		od = 1;
 
@@ -455,6 +356,9 @@ static bool assign_cores(struct clam_info *info)
 
 static bool reset_all(struct clam_info *info)
 {
+//	struct timeval tv_start, tv_now;
+//	cgtime(&tv_start);
+
 	if (unlikely(!write_register(info->fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
 	{
 		applog(LOG_ERR, "[Clam] reset all failed");
@@ -467,9 +371,14 @@ static bool reset_all(struct clam_info *info)
 	}
 
 	info->last_nonce = 0;
+	
+//	cgtime(&tv_now);
+	
+//	int passed = (int64_t)us_tdiff(&tv_now, &tv_start);
+//	applog(LOG_ERR, "[Clam Debug] reset time: %d", passed);
 
 	//re-set bypass
-	int i;
+/*	int i;
 	for (i=0;i<CLAM_MAX_CHIP_COUNT;i++)
 	{
 		if (info->chip_bypass[i])
@@ -479,7 +388,7 @@ static bool reset_all(struct clam_info *info)
 				return false;
 		}
 	}
-
+*/
 	return true;
 }
 
@@ -502,7 +411,7 @@ static bool detect_cores(struct clam_info *info)
 		return false;
 	}
 
-	for (i = 0;i < CLAM_MAX_CHIP_COUNT; i++)
+	for (i = 0;i < 64; i++)
 	{
 		//send read chip_id reg command
 		set_rts(fd);
@@ -624,6 +533,7 @@ static bool detect_cores(struct clam_info *info)
 		if (unlikely(!set_core_mask(fd, chip_id, info->core_map[chip_id])))
 			return false;
 
+/* 
 		if (!info->core_map[chip_id])
 		{
 			//bypass
@@ -631,6 +541,7 @@ static bool detect_cores(struct clam_info *info)
 				return false;
 			info->chip_bypass[i] = true;
 		}
+*/
 	}
 
 	return true;
@@ -638,22 +549,19 @@ static bool detect_cores(struct clam_info *info)
 
 static bool clam_detect_one(const char *devpath)
 {
-#ifdef RASPBERRYPI
-	gpio = setup_io();
-	set_3b(17, GP_OUT);
-#endif
-
 	applog(LOG_DEBUG, "[Clam] detecting device on serial %s", devpath);
 
 	struct clam_info *info = calloc(1, sizeof(*info));
 
 	//open serial for detect
-	int fd = serial_open(devpath, 115200, 0, true);
+	int fd = serial_open(devpath, 115200, 1, true);
 	if (unlikely(fd == -1)) {
 		applog(LOG_ERR, "[Clam] failed to open %s", devpath);
 		goto failed;
 	}
 
+  hard_reset(fd);
+  	
 	info->fd = fd;
 	clear_rts(fd);
 
@@ -725,15 +633,32 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	else
 	{
 		applog(LOG_DEBUG, "[Clam] nonce found [%08x], for midstate[%08x]", nonce, *((uint32_t *)info->current_work->midstate));
-		if (!submit_nonce(thr, info->current_work, nonce))
+		
+		
+		//try submit
+		int i;
+		for (i = 0; i< info->array_top - 1; i++)
 		{
-			applog(LOG_DEBUG, "[Clam] HW error, reset all");
+			if (test_nonce(info->work_array[i], nonce))
+			{
+				if (i > 3)
+					applog(LOG_ERR, "[Clam] Submit for work %d, %08x", i, nonce);
+				if (!submit_nonce(thr, info->work_array[i], nonce))
+					applog(LOG_ERR, "[Clam] unexpceted submit failure.");
+				break;
+			}
+		}
+		if (i == info->array_top)
+		{
+			//must submit for the HW count
+			submit_nonce(thr, info->work_array[0], nonce);
+			applog(LOG_ERR, "[Clam] HW error, reset all, %08x", nonce);
 			thr->work_restart = true;
 		}
 
-		work_completed(thr->cgpu, info->current_work);
 		info->current_work = info->queued_work;
 		info->queued_work = NULL;
+
 		if (info->current_work != NULL)
 		{
 			//queued work
@@ -767,6 +692,20 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 		work_completed(cgpu, work);
 		return false;
 	}
+	
+	if (info->array_top == WORK_ARRAY_SIZE)
+	{
+		//full
+		work_completed(cgpu, info->work_array[info->array_top - 1]);
+	}
+	else
+	{
+		info->array_top++;
+	}
+	int i;
+	for (i = info->array_top - 1; i > 0 ;i--)
+		info->work_array[i] = info->work_array[i-1];
+	info->work_array[0] = work;
 
 	if (opt_clam_use_queue)
 	{
@@ -796,18 +735,15 @@ static void clam_flush_work(struct cgpu_info *cgpu)
 	struct clam_info *info = cgpu->device_data;
 
 	reset_all(info);
-	tcflush(info->fd, TCIOFLUSH);
 
 	info->last_nonce = 0;
 
 	if (info->queued_work)
 	{
-		work_completed(cgpu, info->queued_work);
 		info->queued_work = NULL;
 	}
 	if (info->current_work)
 	{
-		work_completed(cgpu, info->current_work);
 		info->current_work = NULL;
 	}
 }
@@ -816,6 +752,7 @@ static void clam_thread_shutdown(struct thr_info *thr)
 {
 	struct clam_info *info = thr->cgpu->device_data;
 	reset_all(info);
+	hard_reset(info->fd);
 	applog(LOG_NOTICE, "[Clam] shutdown");
 }
 

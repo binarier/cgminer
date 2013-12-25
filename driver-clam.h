@@ -48,6 +48,8 @@
 #error "Windows is not supported by Clam driver yet."
 #endif
 
+#define WORK_ARRAY_SIZE 20
+
 struct clam_info
 {
 	int chip_count;
@@ -59,6 +61,8 @@ struct clam_info
 	//track two works on device
 	struct work *current_work;
 	struct work *queued_work;
+	struct work *work_array[WORK_ARRAY_SIZE];
+	int array_top;
 
 	//track last work finish time
 	struct timeval tv_work_start;
