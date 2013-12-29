@@ -1260,6 +1260,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--clam-chip-end",
 				set_int_0_to_64, opt_show_intval, &opt_clam_chip_end,
 				"last active chip id, excluding."),
+	OPT_WITHOUT_ARG("--clam-test",
+			opt_set_bool, &opt_clam_test,
+			"just test"),
 #endif
 	OPT_WITHOUT_ARG("--load-balance",
 		     set_loadbalance, &pool_strategy,

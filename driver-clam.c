@@ -46,6 +46,7 @@ int opt_clam_clock = CLAM_DEFAULT_CLOCK;
 int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
 int opt_clam_chip_start = 0;
 int opt_clam_chip_end = CLAM_MAX_CHIP_COUNT;
+bool opt_clam_test = false;
 
 static bool hard_reset(int fd)
 {
@@ -109,14 +110,18 @@ static bool clam_read(int fd, struct timeval *timeout, uint32_t *result)
 
 static bool clam_write(int fd, const void *data, int size)
 {
+	/*
 	int i;
 	for (i=0;i<size;i++)
 	{
 		if (write(fd, data+i, 1)!=1)
 			return false;
-		if ((i + 1) % 22 == 0)
-			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
-	}
+//		if ((i + 1) % 22 == 0)
+//			tcdrain(fd);	//used for FPGA verification, can be safely deleted when ASIC is out
+	}*/
+	int err = write(fd, data, size);
+	if (err != size)
+		applog(LOG_ERR, "[Clam] write error %d", err);
 	tcdrain(fd);
 	return true;
 }
@@ -302,7 +307,7 @@ static bool send_test_work(int fd)
 	}
 	else
 	{
-		applog(LOG_NOTICE, "[Clam] test work OK");
+		applog(LOG_DEBUG, "[Clam] test work OK");
 	}
 
 	return true;
@@ -517,7 +522,7 @@ static bool detect_cores(struct clam_info *info)
 			else
 			{
 				//funtional core found
-				applog(LOG_NOTICE, "[Clam] Funtional core found:[%02x]/[%02x]", chip_id, j);
+				applog(LOG_DEBUG, "[Clam] Funtional core found:[%02x]/[%02x]", chip_id, j);
 				info->core_count++;
 				info->core_map[chip_id] |= mask;
 			}
@@ -584,6 +589,9 @@ static bool clam_detect_one(const char *devpath)
 		applog(LOG_ERR, "[Clam] no functional core found");
 		goto failed;
 	}
+	
+	if (opt_clam_test)
+		goto failed;
 
 	//set ranges
 	if (unlikely(!assign_cores(info)))
@@ -643,7 +651,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		{
 			if (test_nonce(info->work_array[i], nonce))
 			{
-				if (i > 3)
+				if (i > 5)
 					applog(LOG_ERR, "[Clam] Submit for work %d, %08x", i, nonce);
 				if (!submit_nonce(thr, info->work_array[i], nonce))
 					applog(LOG_ERR, "[Clam] unexpceted submit failure.");
@@ -656,7 +664,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		{
 			//must submit for the HW count
 			submit_nonce(thr, info->work_array[0], nonce);
-			applog(LOG_ERR, "[Clam] HW error, reset all, %08x, %d", nonce);
+			applog(LOG_ERR, "[Clam] HW error, reset all, %08x", nonce);
 			thr->work_restart = true;
 		}
 
