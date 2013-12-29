@@ -56,16 +56,16 @@ struct clam_info
 	int core_count;
 	unsigned char core_map[CLAM_MAX_CHIP_COUNT];
 	bool chip_bypass[CLAM_MAX_CHIP_COUNT];
-	int fd;
 	uint32_t last_nonce;
-	//track two works on device
-	struct work *current_work;
-	struct work *queued_work;
 	struct work *work_array[WORK_ARRAY_SIZE];
+	bool has_queued_work;
 	int array_top;
 
-	//track last work finish time
 	struct timeval tv_work_start;
+
+	int work_count_total;
+	int timeout_total;
+	int period_timeout;
 };
 
 char *set_clam_clock(char *arg);

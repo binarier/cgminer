@@ -48,29 +48,47 @@ int opt_clam_clock = CLAM_DEFAULT_CLOCK;
 int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
 bool opt_clam_use_queue = true;
 
-static bool hard_reset(struct cgpu_info *cgpu)
+static void binary2char(char *buf, unsigned char n)
 {
- /*       int bits;
-        ioctl(fd, TIOCMGET, &bits);
+	int i;
+	for (i=0;i<8;i++)
+	{
+		buf[i] = ((n>>i)&1) ? '1' : '0';
+	}
+}
+static void flush_buffer(struct cgpu_info *bitfury)
+{
+	char buf[512];
+	int amount;
 
-        bits |= TIOCM_DTR;
-        ioctl(fd, TIOCMSET, &bits);
-
-
-        bits &= ~TIOCM_DTR;
-        ioctl(fd, TIOCMSET, &bits);
-*/
-        return true;
+	do {
+		usb_read_once(bitfury, buf, 512, &amount, C_BF1_FLUSH);
+	} while (amount);
 }
 
 static bool clam_read(struct cgpu_info *cgpu, int ms_timeout, uint32_t *result)
 {
 	uint32_t buf;
 	int r;
+	
+	struct timeval tv_now, tv_start;
+	cgtime(&tv_start);
+	
 	int err = usb_read_timeout(cgpu, (char *)&buf, 4, &r, ms_timeout, C_BF1_FLUSH);
-//	applog(LOG_ERR, "read %d bytes", r);
-	if (err != LIBUSB_SUCCESS)
+	if (err != LIBUSB_SUCCESS || r == 0)
+	{
+		//applog(LOG_ERR, "read error:%d", err);
 		return false;
+	}
+	/*
+	if (r == 0)
+	{
+		cgtime(&tv_now);
+		int passed = us_tdiff(&tv_now, &tv_start);
+		applog(LOG_ERR, "passed:%d", passed);
+	}
+	*/
+	//applog(LOG_ERR, "[Clam Debug] err : %d, amount:%d", err, r);
 	//change endian
 	*result = be32toh(buf);
 	return true;
@@ -80,37 +98,74 @@ static bool clam_write(struct cgpu_info *cgpu, void *data, int size)
 {
 	int n;
 	int err;
-	if ((err = usb_write_timeout(cgpu, data, size, &n, 1000, C_CLAM_WRITE_WORK)) != 0)
+	
+	if ((err = usb_write(cgpu, data, size, &n, C_CLAM_WRITE_WORK)) != 0)
 	{
 		applog(LOG_ERR, "[Clam] usb write error:%d", err);
 		return false;
 	}
+	if (n != size)
+	{
+		applog(LOG_ERR, "[Clam Debug] write error===================================");
+		return false;
+	}
+
+	/*
+	int i;
+	for (i=0;i<size;i++)
+	{
+	if ((err = usb_write(cgpu, data+i, 1, &n, C_CLAM_WRITE_WORK)) != 0)
+	{
+		applog(LOG_ERR, "[Clam] usb write error:%d", err);
+		return false;
+	}
+	if (n == 0)
+	{
+		applog(LOG_ERR, "[Clam Debug] write error======================");
+		return false;
+	}
+	cgsleep_ms(1);
+	}*/
 	return true;
 }
 
+#define SIO_SET_DTR_MASK 0x1
+#define SIO_SET_DTR_HIGH ( 1 | ( SIO_SET_DTR_MASK  << 8))
+#define SIO_SET_DTR_LOW  ( 0 | ( SIO_SET_DTR_MASK  << 8))
 #define SIO_SET_RTS_MASK 0x2
 #define SIO_SET_RTS_HIGH ( 2 | ( SIO_SET_RTS_MASK << 8 ))
 #define SIO_SET_RTS_LOW ( 0 | ( SIO_SET_RTS_MASK << 8 ))
 static void set_rts(struct cgpu_info *cgpu)
 {
 	int ret;
-    if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT,
-    		FTDI_REQUEST_MODEM, SIO_SET_RTS_LOW, usb_interface(cgpu),
-                                NULL, 0, 1000)) !=LIBUSB_SUCCESS)
-		{
-			applog(LOG_ERR, "set rts error %d", ret);
-		}
+  if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT, FTDI_REQUEST_MODEM, SIO_SET_RTS_LOW, usb_interface(cgpu), NULL, 0, 1000)) !=LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "set rts error %d", ret);
+	}
 }
 
 static void clear_rts(struct cgpu_info *cgpu)
 {
 	int ret;
-    if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT,
-    		FTDI_REQUEST_MODEM, SIO_SET_RTS_HIGH, usb_interface(cgpu),
-                                NULL, 0, 1000)) !=LIBUSB_SUCCESS)
-		{
-			applog(LOG_ERR, "clearrts error %d", ret);
-		}
+  if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT, FTDI_REQUEST_MODEM, SIO_SET_RTS_HIGH, usb_interface(cgpu), NULL, 0, 1000)) !=LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "clearrts error %d", ret);
+	}
+}
+static bool hard_reset(struct cgpu_info *cgpu)
+{
+	int ret;
+  if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT, FTDI_REQUEST_MODEM, SIO_SET_DTR_HIGH, usb_interface(cgpu), NULL, 0, 1000)) !=LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "set dtr error %d", ret);
+		return false;
+	}
+  if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT, FTDI_REQUEST_MODEM, SIO_SET_DTR_LOW, usb_interface(cgpu), NULL, 0, 1000)) !=LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "set dtr error %d", ret);
+		return false;
+	}
+  return true;
 }
 
 static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned char *data)
@@ -132,7 +187,7 @@ static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned
 	for (i=0;i<12;i++)
 		buf[32 + i] = data[11-i];
 
-	clear_rts(cgpu);
+	//clear_rts(cgpu);
 
 	if (unlikely(!clam_write(cgpu, buf, sizeof(buf))))
 	{
@@ -229,7 +284,7 @@ static bool set_pll_simple(struct cgpu_info *cgpu, const int chip_id, int freque
 	uint8_t n = CLAM_PLL_DEFAULT_N;
 
 	od = 2;
-	n = 2;
+	n = 1;
 	if (frequency > 360)
 		od = 1;
 
@@ -243,6 +298,9 @@ static bool set_pll_simple(struct cgpu_info *cgpu, const int chip_id, int freque
 	//PLL should be reset after registers have been set
 	if (unlikely(!write_register(cgpu, chip_id, CLAM_REG_PLL2, pll2 | 0x01)))
 		return false;
+		
+	opt_clam_clock = CLAM_PLL_DEFAULT_XIN / n * m >> od;
+	applog(LOG_ERR, "[Clam Debug] set PLL to %d MHz", opt_clam_clock);
 	return true;
 
 }
@@ -331,11 +389,23 @@ static bool assign_cores(struct cgpu_info *cgpu, struct clam_info *info)
 
 static bool reset_all(struct cgpu_info *cgpu)
 {
+	/*
+	struct timeval tv_now, tv_start;
+	cgtime(&tv_start);
+*/	
 	if (unlikely(!write_register(cgpu, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET)))
 	{
 		applog(LOG_ERR, "[Clam] reset all failed");
 		return false;
-	}/*
+	}
+	struct clam_info *info = cgpu->device_data;
+
+	info->has_queued_work = false;
+/*	cgtime(&tv_now);
+	int passed = us_tdiff(&tv_now, &tv_start);
+	applog(LOG_ERR, "passed:%d", passed);
+*/
+	/*
 	if (unlikely(!write_register(cgpu, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
 	{
 		applog(LOG_ERR, "[Clam] init range all failed");
@@ -377,31 +447,17 @@ static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
 		return false;
 	}
 
-	for (i = 0;i < CLAM_MAX_CHIP_COUNT; i++)
+	uint8_t chip_ids[CLAM_MAX_CHIP_COUNT];
+	for (i=0;i<32;i++)
 	{
-		//send read chip_id reg command
-		set_rts(cgpu);
-		if (unlikely(!request_register(cgpu, i, CLAM_REG_CHIP_ID)))
+		uint8_t chip_id;
+		if (read_register(cgpu, i, CLAM_REG_CHIP_ID, &chip_id))
 		{
-			applog(LOG_ERR, "[Clam] send read chip_id command failed [%02x]", i);
-			clear_rts(cgpu);
-			return false;
+			chip_ids[info->chip_count++] = chip_id;
+			applog(LOG_NOTICE, "[Clam] Chip 0x%02x found!", chip_id);
 		}
-		clear_rts(cgpu);
 	}
 
-	struct timeval tv_timeout = { 0, 100000 };//0.1s
-	//read all returned data until timeout
-	uint8_t chip_ids[CLAM_MAX_CHIP_COUNT];
-	while(42)
-	{
-		uint32_t result;
-		if (!clam_read(cgpu, 10000, &result))
-			break;
-		uint8_t chip_id = (result >> ((3 - (CLAM_REG_CHIP_ID & 0x3)) * 8)) & 0xff;
-		chip_ids[info->chip_count++] = chip_id;
-		applog(LOG_NOTICE, "[Clam] Chip 0x%02x found!", chip_id);
-	}
 	applog(LOG_NOTICE, "[Clam] %d chips detected", info->chip_count);
 	if (info->chip_count == 0)
 		return false;
@@ -462,7 +518,12 @@ static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
 		int j;
 		for (j=0;j<opt_clam_core_limit;j++)
 		{
-
+	/*		if (j==3||j==7)
+			{
+				mask <<=1;
+				continue;
+			}
+*/
 			//send test work to try the hash core
 			//core must be enabled BEFORE core range being set
 			if (unlikely(!write_register(cgpu, chip_id, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET))||	//reset first
@@ -470,12 +531,12 @@ static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
 				unlikely(!set_core_range(cgpu, chip_id, j, 0x0000, 0xffff))||	//set the full range
 				unlikely(!send_test_work(cgpu)))							//send test golden work
 			{
-				applog(LOG_ERR, "[Clam] chip [%02x] core [%02x] test failed, ignored", chip_id, j);
+				applog(LOG_ERR, "[Clam Debug] chip [%02x] core [%02x] test failed, ignored", chip_id, j);
 			}
 			else
 			{
 				//funtional core found
-				applog(LOG_NOTICE, "[Clam] Funtional core found:[%02x]/[%02x]", chip_id, j);
+				applog(LOG_DEBUG, "[Clam Debug] Funtional core found:[%02x]/[%02x]", chip_id, j);
 				info->core_count++;
 				info->core_map[chip_id] |= mask;
 			}
@@ -489,6 +550,18 @@ static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
 	}
 
 	applog(LOG_NOTICE, "[Clam] %d functional cores found.", info->core_count);
+/*	applog(LOG_NOTICE, "[Clam] \t0\t1\t2\t3");
+	for (i=0; i< info->chip_count; i++)
+	{
+		int j;
+		for (j=0;j<8,j++)
+		{
+			char buf1[8 + 1];
+			
+			applog(LOG_NOTICE, "[Clam] %d\t");
+		}
+	}
+*/
 
 	//enable all functional cores
 	for (i=0;i<info->chip_count;i++)
@@ -525,8 +598,10 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 
 	if (!usb_init(cgpu, dev, found))
 		goto out;
-
+		
 	usb_buffer_enable(cgpu);
+	usb_ftdi_set_latency(cgpu);
+
 	int ret;
     if ((ret = libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT,
     		FTDI_REQUEST_BAUD, 0x1a, 0,// usb_interface(cgpu),
@@ -537,6 +612,8 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 	hard_reset(cgpu);
 
 	clear_rts(cgpu);
+
+	uint8_t n;
 
 	if (unlikely(!set_pll_simple(cgpu, CLAM_CHIP_ID_ALL, opt_clam_clock)))
 		return false;
@@ -554,6 +631,9 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 	if (unlikely(!assign_cores(cgpu, info)))
 		goto failed;
 
+	reset_all(cgpu);
+	
+	flush_buffer(cgpu);
 
 	return true;
 
@@ -578,57 +658,94 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	struct cgpu_info *cgpu = thr->cgpu;
 	struct clam_info *info = cgpu->device_data;
 	struct timeval tv_timeout;
+	char buf[4];
 
-	int64_t us_timeout = 0xffffffff / info->core_count / opt_clam_clock ;	//max timeout
+	int ms_timeout = 4294967 / info->core_count / opt_clam_clock ;	//max timeout
+
+			//clam debug
+		if (info->work_count_total % 50 == 0)
+		{
+		//	applog(LOG_NOTICE, "[Clam Debug] ============timeout ratio: %.4f%%(total),  %.4f%%(20)", info->timeout_total * 100.0 / info->work_count_total, info->period_timeout * 100.0 / 50);
+			info->period_timeout = 0;
+		}
 
 	//calc the actual timeout time
-	struct timeval tv_now;
+	struct timeval tv_now, tv_now2;
 	cgtime(&tv_now);
-	int64_t passed = (int64_t)us_tdiff(&tv_now, &info->tv_work_start);
-
-	us_timeout -= passed;
-
+	
+	//applog(LOG_ERR, "[Clam Debug] timeout %d", ms_timeout);
+	
 	uint32_t nonce;
-	if (unlikely(!clam_read(cgpu, us_timeout / 1000, &nonce)))
+	if (unlikely(!clam_read(cgpu, ms_timeout, &nonce)))
 	{
 		applog(LOG_DEBUG, "[Clam] read nonce timeout or error, reset all");
 
 		thr->work_restart = true;
+		
+		info->work_count_total++;
+		info->timeout_total++;
+		info->period_timeout++;
 
 		return 0x100000000;
 	}
 	else
 	{
-		applog(LOG_DEBUG, "[Clam] nonce found [%08x], for midstate[%08x]", nonce, *((uint32_t *)info->current_work->midstate));
+//		applog(LOG_DEBUG, "[Clam] nonce found [%08x], for midstate[%08x]", nonce, *((uint32_t *)info->current_work->midstate));
+		info->work_count_total++;
 		
 		//try submit
 		int i;
+		bool found = false;
 		for (i = 0; i< info->array_top - 1; i++)
 		{
 			if (test_nonce(info->work_array[i], nonce))
 			{
-				if (i > 3)
+				if (i > 5)
 					applog(LOG_ERR, "[Clam] Submit for work %d, %08x", i, nonce);
 				if (!submit_nonce(thr, info->work_array[i], nonce))
 					applog(LOG_ERR, "[Clam] unexpceted submit failure.");
+				found = true;
 				break;
 			}
 		}
-		if (i == info->array_top)
+		if (!found)
 		{
 			//must submit for the HW count
 			submit_nonce(thr, info->work_array[0], nonce);
-			applog(LOG_ERR, "[Clam] HW error, reset all, %08x", nonce);
+			applog(LOG_ERR, "[Clam] HW error, reset all, %08x, %d", nonce, info->work_count_total);
+			/*
+			int kk;
+			for (kk=0;kk<MIN(4, info->array_top);kk++)
+			{
+				reset_all(cgpu);
+				write_work(cgpu, info->work_array[kk]->midstate, info->work_array[kk]->data + 64);
+				uint32_t rn;
+				if (!clam_read(cgpu, ms_timeout, &rn))
+				{
+					applog(LOG_ERR, "[Clam Debug] resubmit for work %d failed", kk);
+				}
+				else
+				{
+					applog(LOG_ERR, "[Clam Debug] resubmit for work %d, got %08x", kk, rn);
+				}
+			}
+
+			for (kk=0;kk<MIN(4, info->array_top);kk++)
+			{
+				reset_all(cgpu);
+				write_work(cgpu, info->work_array[kk]->midstate, info->work_array[kk]->data + 64);
+				uint32_t rn;
+				if (!clam_read(cgpu, ms_timeout, &rn))
+				{
+					applog(LOG_ERR, "[Clam Debug] resubmit for work %d failed", kk);
+				}
+				else
+				{
+					applog(LOG_ERR, "[Clam Debug] resubmit for work %d, got %08x", kk, rn);
+				}
+			}
+			*/
 			thr->work_restart = true;
-		}
-
-		info->current_work = info->queued_work;
-		info->queued_work = NULL;
-
-		if (info->current_work != NULL)
-		{
-			//queued work
-			cgtime(&(info->tv_work_start));
 		}
 
 		//estimate the hashes
@@ -673,45 +790,19 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 		info->work_array[i] = info->work_array[i-1];
 	info->work_array[0] = work;
 
-	if (opt_clam_use_queue)
+	if (!info->has_queued_work)
 	{
-		if (!info->current_work)
-		{
-			info->current_work = work;
-			cgtime(&(info->tv_work_start));
-			return false;
-		}
-		else
-		{
-			info->queued_work = work;
-			return true;
-		}
+		info->has_queued_work = true;
+		return false;
 	}
-	else
-	{
-		info->current_work = work;
-		return true;
-	}
+	return true;
 }
 
 static void clam_flush_work(struct cgpu_info *cgpu)
 {
 	applog(LOG_DEBUG, "[Clam] flush work and reset all");
-	//clean all the work on device
-	struct clam_info *info = cgpu->device_data;
-
 	reset_all(cgpu);
 
-	info->last_nonce = 0;
-
-	if (info->queued_work)
-	{
-		info->queued_work = NULL;
-	}
-	if (info->current_work)
-	{
-		info->current_work = NULL;
-	}
 }
 
 static void clam_thread_shutdown(struct thr_info *thr)
