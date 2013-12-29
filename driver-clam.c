@@ -253,7 +253,7 @@ static bool set_pll_simple(int fd, const int chip_id, int frequency)
 	uint8_t n = CLAM_PLL_DEFAULT_N;
 
 	od = 2;
-	n = 1;
+	n = 2;
 	if (frequency > 360)
 		od = 1;
 
@@ -364,6 +364,7 @@ static bool reset_all(struct clam_info *info)
 		applog(LOG_ERR, "[Clam] reset all failed");
 		return false;
 	}
+	info->has_queued_work = false;
 	tcflush(info->fd, TCIOFLUSH);
 	/*
 	if (unlikely(!write_register(info->fd, CLAM_CHIP_ID_ALL, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RANGE_INITIAL)))
@@ -566,6 +567,8 @@ static bool clam_detect_one(const char *devpath)
 		applog(LOG_ERR, "[Clam] failed to open %s", devpath);
 		goto failed;
 	}
+	
+	hard_reset(fd);
 
 	info->fd = fd;
 	clear_rts(fd);
