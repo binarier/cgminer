@@ -44,6 +44,8 @@
 #define CLAM_GC_LOOP_DOWN_M		0x40		//Down loop for DN_MREQ and DN_MACK
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
+#define WORK_ARRAY_SIZE 20
+
 #ifdef WIN32
 #error "Windows is not supported by Clam driver yet."
 #endif
@@ -56,17 +58,18 @@ struct clam_info
 	bool chip_bypass[CLAM_MAX_CHIP_COUNT];
 	int fd;
 	uint32_t last_nonce;
-	//track two works on device
-	struct work *current_work;
-	struct work *queued_work;
+	struct work *work_array[WORK_ARRAY_SIZE];
+	bool has_queued_work;
+	int array_top;
 
 	//track last work finish time
 	struct timeval tv_work_start;
 };
 
 char *set_clam_clock(char *arg);
-char *set_clam_noqueue(void);
 extern int opt_clam_core_limit;
+extern int opt_clam_chip_start;
+extern int opt_clam_chip_end;
 
 #endif /* USE_CLAM */
 #endif	/* CLAM_H */
