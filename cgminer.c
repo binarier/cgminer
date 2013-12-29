@@ -644,7 +644,12 @@ static char *set_int_0_to_100(const char *arg, int *i)
 	return set_int_range(arg, i, 0, 100);
 }
 #endif
-
+#ifdef USE_CLAM
+static char *set_int_0_to_64(const char *arg, int *i)
+{
+	return set_int_range(arg, i, 0, 64);
+}
+#endif
 #ifdef USE_BFLSC
 static char *set_int_0_to_200(const char *arg, int *i)
 {
@@ -1248,9 +1253,15 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--clam-limit-cores",
 				set_int_1_to_10, opt_show_intval, &opt_clam_core_limit,
 				"Limit cores per Clam chip"),
-	OPT_WITHOUT_ARG("--clam-noqueue",
-				set_clam_noqueue, NULL,
-				"Disable clam device queue support"),
+	OPT_WITH_ARG("--clam-chip-start",
+				set_int_0_to_64, opt_show_intval, &opt_clam_chip_start,
+				"first active chip id, including."),
+	OPT_WITH_ARG("--clam-chip-end",
+				set_int_0_to_64, opt_show_intval, &opt_clam_chip_end,
+				"last active chip id, excluding."),
+	OPT_WITHOUT_ARG("--clam-test",
+			opt_set_bool, &opt_clam_test,
+			"just test"),
 #endif
 	OPT_WITHOUT_ARG("--load-balance",
 		     set_loadbalance, &pool_strategy,

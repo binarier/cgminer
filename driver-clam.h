@@ -44,6 +44,13 @@
 #define CLAM_GC_LOOP_DOWN_M		0x40		//Down loop for DN_MREQ and DN_MACK
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
+#define SIO_SET_DTR_MASK 0x1
+#define SIO_SET_DTR_HIGH ( 1 | ( SIO_SET_DTR_MASK  << 8))
+#define SIO_SET_DTR_LOW  ( 0 | ( SIO_SET_DTR_MASK  << 8))
+#define SIO_SET_RTS_MASK 0x2
+#define SIO_SET_RTS_HIGH ( 2 | ( SIO_SET_RTS_MASK << 8 ))
+#define SIO_SET_RTS_LOW ( 0 | ( SIO_SET_RTS_MASK << 8 ))
+
 #ifdef WIN32
 #error "Windows is not supported by Clam driver yet."
 #endif
@@ -69,8 +76,10 @@ struct clam_info
 };
 
 char *set_clam_clock(char *arg);
-char *set_clam_noqueue(void);
 extern int opt_clam_core_limit;
+extern int opt_clam_chip_start;
+extern int opt_clam_chip_end;
+extern bool opt_clam_test;
 
 #endif /* USE_CLAM */
 #endif	/* CLAM_H */
