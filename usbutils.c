@@ -427,7 +427,7 @@ static struct usb_find_devices find_dev[] = {
 		.idProduct = 0x6001,
 		.config = 1,
 		.timeout = 100,
-		.latency = 4,
+		.latency = 2,
 		INTINFO(clam_ints) },
 #endif
 	{ DRV_LAST, NULL, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, NULL }

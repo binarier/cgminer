@@ -55,7 +55,7 @@
 #error "Windows is not supported by Clam driver yet."
 #endif
 
-#define WORK_ARRAY_SIZE 20
+#define WORK_ARRAY_SIZE 10
 
 struct clam_info
 {
@@ -83,7 +83,7 @@ char *set_clam_clock(char *arg);
 extern int opt_clam_core_limit;
 extern int opt_clam_chip_start;
 extern int opt_clam_chip_end;
-extern bool opt_clam_test;
+extern bool opt_clam_no_test;
 
 #endif /* USE_CLAM */
 #endif	/* CLAM_H */

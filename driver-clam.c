@@ -46,7 +46,7 @@ int opt_clam_clock = CLAM_DEFAULT_CLOCK;
 int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
 int opt_clam_chip_start = 0;
 int opt_clam_chip_end = 32;
-bool opt_clam_test = false;
+bool opt_clam_no_test = false;
 
 static void flush_buffer(struct cgpu_info *bitfury)
 {
@@ -144,9 +144,7 @@ static bool hard_reset(struct cgpu_info *cgpu)
 		applog(LOG_ERR, "[Clam] reset ft232 failed");
 		return false;
 	}
-  if (libusb_control_transfer(cgpu->usbdev->handle, FTDI_TYPE_OUT,
-                                FTDI_REQUEST_RESET, FTDI_VALUE_PURGE_RX,
-                                usb_interface(cgpu), NULL, 0, 1000) != LIBUSB_SUCCESS)
+  if (usb_transfer(cgpu, FTDI_TYPE_OUT, FTDI_REQUEST_RESET, FTDI_VALUE_PURGE_RX,usb_interface(cgpu), C_PURGERX) != LIBUSB_SUCCESS)
 	{
 		applog(LOG_ERR, "[Clam] reset ft232 failed");
 		return false;
@@ -403,8 +401,9 @@ static bool reset_all(struct cgpu_info *cgpu)
 	return true;
 }
 
-static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
+static bool detect_cores(struct cgpu_info *cgpu)
 {
+	struct clam_info *info = cgpu->device_data;
 	//assume the max number of chips, reset all chips and read chip_id, wait response to detect chips
 	int i;
 
@@ -517,21 +516,29 @@ static bool detect_cores(struct cgpu_info *cgpu, struct clam_info *info)
 		int j;
 		for (j=0;j<opt_clam_core_limit;j++)
 		{
-			//send test work to try the hash core
-			//core must be enabled BEFORE core range being set
-			if (unlikely(!write_register(cgpu, chip_id, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET))||	//reset first
-				unlikely(!set_core_mask(cgpu, chip_id, mask))||			//enable the core only
-				unlikely(!set_core_range(cgpu, chip_id, j, 0x0000, 0xffff))||	//set the full range
-				unlikely(!send_test_work(cgpu)))							//send test golden work
+			if (!opt_clam_no_test)
 			{
-				applog(LOG_ERR, "[Clam Debug] chip [%02x] core [%02x] test failed, ignored", chip_id, j);
+				//send test work to try the hash core
+				//core must be enabled BEFORE core range being set
+				if (unlikely(!write_register(cgpu, chip_id, CLAM_REG_GENERAL_CONTROL, CLAM_GC_RESET))||	//reset first
+					unlikely(!set_core_mask(cgpu, chip_id, mask))||			//enable the core only
+					unlikely(!set_core_range(cgpu, chip_id, j, 0x0000, 0xffff))||	//set the full range
+					unlikely(!send_test_work(cgpu)))							//send test golden work
+				{
+					applog(LOG_ERR, "[Clam Debug] chip [%02x] core [%02x] test failed, ignored", chip_id, j);
+				}
+				else
+				{
+					//funtional core found
+					applog(LOG_DEBUG, "[Clam Debug] Funtional core found:[%02x]/[%02x]", chip_id, j);
+					info->core_count++;
+					info->core_map[chip_id] |= mask;
+				}
 			}
 			else
 			{
-				//funtional core found
-				applog(LOG_DEBUG, "[Clam Debug] Funtional core found:[%02x]/[%02x]", chip_id, j);
-				info->core_count++;
-				info->core_map[chip_id] |= mask;
+					info->core_count++;
+					info->core_map[chip_id] |= mask;
 			}
 			mask <<=1;
 
@@ -581,25 +588,77 @@ static void clam_reinit(struct cgpu_info  *cgpu)
 {
 	struct clam_info *info = cgpu->device_data;
 	
-		flush_buffer(cgpu);
+	flush_buffer(cgpu);
 
-		hard_reset(cgpu);
-		clear_rts(cgpu);
-		if (unlikely(!set_pll_simple(cgpu, CLAM_CHIP_ID_ALL, opt_clam_clock)))
-		{
-			applog(LOG_ERR, "[Clam] set PLL error");
-			return;
-		}
-		
-		if (!assign_cores(cgpu))
-		{
-			applog(LOG_ERR, "[Clam] assign cores error");
-			return;
-		}
-		reset_all(cgpu);
-		memset(info->core_last_nonce, 0, sizeof(info->core_last_nonce));
-		info->cont_timeout = 0;
+	hard_reset(cgpu);
+	clear_rts(cgpu);
+	if (unlikely(!set_pll_simple(cgpu, CLAM_CHIP_ID_ALL, opt_clam_clock)))
+	{
+		applog(LOG_ERR, "[Clam] set PLL error");
+		return;
+	}
+	
+	if (!assign_cores(cgpu))
+	{
+		applog(LOG_ERR, "[Clam] assign cores error");
+		return;
+	}
+	reset_all(cgpu);
+	memset(info->core_last_nonce, 0, sizeof(info->core_last_nonce));
+	info->cont_timeout = 0;
 }
+
+static bool clam_init(struct cgpu_info *cgpu)
+{
+	struct clam_info *info = cgpu->device_data;
+	if (cgpu->usbinfo.nodev)
+		return false;
+
+	applog(LOG_NOTICE, "[Clam] start to initilise CLAM Miner");
+	
+	hard_reset(cgpu);		
+	usb_buffer_enable(cgpu);
+	usb_ftdi_set_latency(cgpu);
+	flush_buffer(cgpu);
+
+	int ret;
+  if ((ret = usb_transfer(cgpu, FTDI_TYPE_OUT, FTDI_REQUEST_BAUD, 0x1a, usb_interface(cgpu), C_SETBAUD)) !=LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "[Clam] set baud error %d", ret);
+	}
+
+	if (unlikely(!set_pll_simple(cgpu, CLAM_CHIP_ID_ALL, opt_clam_clock)))
+	{
+		applog(LOG_ERR, "[Clam] set PLL error");
+		return false;
+	}
+
+	if (unlikely(!detect_cores(cgpu)))
+		return false;
+
+	if (!info -> core_count)
+	{
+		applog(LOG_ERR, "[Clam] no functional core found");
+		return false;
+	}
+	
+	//set ranges
+	if (unlikely(!assign_cores(cgpu)))
+		return false;
+	return true;
+}
+
+static bool clam_thread_init(struct thr_info *thr)
+{
+	struct cgpu_info *cgpu = thr->cgpu;
+
+	if (cgpu->usbinfo.nodev)
+	{
+		return false;
+	}
+	return clam_init(cgpu);
+}
+
 
 static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *found)
 {
@@ -614,57 +673,17 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 	add_cgpu(cgpu);
 
 	if (!usb_init(cgpu, dev, found))
-		goto out;
-
-	hard_reset(cgpu);		
-	usb_buffer_enable(cgpu);
-	usb_ftdi_set_latency(cgpu);
-	flush_buffer(cgpu);
-	
-	int ret;
-  if ((ret = usb_transfer(cgpu, FTDI_TYPE_OUT, FTDI_REQUEST_BAUD, 0x1a, usb_interface(cgpu), C_SETBAUD)) !=LIBUSB_SUCCESS)
 	{
-		applog(LOG_ERR, "[Clam] set baud error %d", ret);
-	}
-
-	if (unlikely(!set_pll_simple(cgpu, CLAM_CHIP_ID_ALL, opt_clam_clock)))
-	{
-		applog(LOG_ERR, "[Clam] set PLL error");
+		applog(LOG_ERR, "[Clam] usb init failed");
+		usb_uninit(cgpu);
+		free(info);
+		usb_free_cgpu(cgpu);
 		return false;
 	}
-
-	if (unlikely(!detect_cores(cgpu, info)))
-		goto failed;
-
-	if (!info -> core_count)
-	{
-		applog(LOG_ERR, "[Clam] no functional core found");
-		goto failed;
-	}
-	if (opt_clam_test)
-		goto failed;
-
-	//set ranges
-	if (unlikely(!assign_cores(cgpu)))
-		goto failed;
-
-	reset_all(cgpu);
-	
-	flush_buffer(cgpu);
 	
 	memset(info->core_last_nonce, 0, sizeof(info->core_last_nonce));
 
 	return true;
-
-	failed:;
-	usb_uninit(cgpu);
-	if (info)
-		free(info);
-
-	out:;
-	if (cgpu)
-		usb_free_cgpu(cgpu);
-	return false;
 }
 
 static void clam_detect(void)
@@ -677,6 +696,9 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	struct cgpu_info *cgpu = thr->cgpu;
 	struct clam_info *info = cgpu->device_data;
 	struct timeval tv_timeout;
+
+	if (cgpu->usbinfo.nodev)
+		return -1;
 
 	int ms_timeout = 4294967 / info->core_count / opt_clam_clock ;	//max timeout
 
@@ -727,7 +749,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		
 		info->cont_timeout++;
 		
-		if (info->cont_timeout > 10)
+		if (info->cont_timeout > 20)
 		{
 			applog(LOG_ERR, "[Clam] continous timeout, reinit device");
 			clam_reinit(cgpu);
@@ -794,6 +816,9 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 	struct clam_info *info = cgpu->device_data;
 	struct work *work = get_queued(cgpu);
 
+	if (cgpu->usbinfo.nodev)
+		return false;
+
 	if (!unlikely(write_work(cgpu, work->midstate, work->data + 64)))
 	{
 		applog(LOG_ERR, "[Clam] send work error, discarding current work.");
@@ -833,7 +858,6 @@ static void clam_thread_shutdown(struct thr_info *thr)
 {
 	struct cgpu_info *cgpu = thr->cgpu;
 	clear_dtr(cgpu);
-	usb_uninit(cgpu);
 	
 	applog(LOG_NOTICE, "[Clam] shutdown");
 }
@@ -858,7 +882,7 @@ struct device_drv clam_drv = {
 	.scanwork = clam_scanwork,
 	.queue_full = clam_queue_full,
 	.reinit_device = clam_reinit,
-
+	.thread_init = clam_thread_init,
 	.flush_work = clam_flush_work,
 	.thread_shutdown = clam_thread_shutdown
 };

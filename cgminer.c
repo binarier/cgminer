@@ -650,6 +650,7 @@ static char *set_int_0_to_64(const char *arg, int *i)
 	return set_int_range(arg, i, 0, 64);
 }
 #endif
+
 #ifdef USE_BFLSC
 static char *set_int_0_to_200(const char *arg, int *i)
 {
@@ -1259,9 +1260,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--clam-chip-end",
 				set_int_0_to_64, opt_show_intval, &opt_clam_chip_end,
 				"last active chip id, excluding."),
-	OPT_WITHOUT_ARG("--clam-test",
-			opt_set_bool, &opt_clam_test,
-			"just test"),
+	OPT_WITHOUT_ARG("--clam-no-test",
+			opt_set_bool, &opt_clam_no_test,
+			"No core test work "),
 #endif
 	OPT_WITHOUT_ARG("--load-balance",
 		     set_loadbalance, &pool_strategy,
@@ -7710,6 +7711,10 @@ static void *hotplug_thread(void __maybe_unused *userdata)
 
 #ifdef USE_AVALON
 			avalon_drv.drv_detect();
+#endif
+
+#ifdef USE_CLAM
+			clam_drv.drv_detect();
 #endif
 
 			if (new_devices)
