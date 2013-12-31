@@ -67,8 +67,12 @@ struct clam_info
 	struct work *work_array[WORK_ARRAY_SIZE];
 	bool has_queued_work;
 	int array_top;
+	
+	struct timeval core_last_nonce[CLAM_MAX_CHIP_COUNT * 8];
 
 	struct timeval tv_work_start;
+	
+	int cont_timeout;
 
 	int work_count_total;
 	int timeout_total;
