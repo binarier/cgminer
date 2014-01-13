@@ -175,7 +175,7 @@ static struct usb_intinfo ava_ints[] = {
 
 #ifdef USE_CLAM
 static struct usb_epinfo clam_epinfos[] = {
-	{ LIBUSB_TRANSFER_TYPE_BULK,	64,	EPI(1), 0, 0, 0 },
+	{ LIBUSB_TRANSFER_TYPE_BULK,	64,	EPI(2), 0, 0, 0 },
 	{ LIBUSB_TRANSFER_TYPE_BULK,	64,	EPO(2), 0, 0, 0 }
 };
 
@@ -423,11 +423,11 @@ static struct usb_find_devices find_dev[] = {
 		.drv = 9,
 		.name = "CM",
 		.ident = IDENT_CLAM,
-		.idVendor = IDVENDOR_FTDI,
-		.idProduct = 0x6001,
+		.idVendor = 0x0d28,
+		.idProduct = 0x0204,
 		.config = 1,
-		.timeout = 100,
-		.latency = 2,
+		.timeout = 1000,
+		.latency = LATENCY_UNUSED,
 		INTINFO(clam_ints) },
 #endif
 	{ DRV_LAST, NULL, 0, 0, 0, NULL, NULL, 0, 0, 0, 0, NULL }

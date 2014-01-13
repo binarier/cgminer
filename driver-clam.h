@@ -44,39 +44,31 @@
 #define CLAM_GC_LOOP_DOWN_M		0x40		//Down loop for DN_MREQ and DN_MACK
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
-#define SIO_SET_DTR_MASK 0x1
-#define SIO_SET_DTR_HIGH ( 1 | ( SIO_SET_DTR_MASK  << 8))
-#define SIO_SET_DTR_LOW  ( 0 | ( SIO_SET_DTR_MASK  << 8))
-#define SIO_SET_RTS_MASK 0x2
-#define SIO_SET_RTS_HIGH ( 2 | ( SIO_SET_RTS_MASK << 8 ))
-#define SIO_SET_RTS_LOW ( 0 | ( SIO_SET_RTS_MASK << 8 ))
-
 #ifdef WIN32
 #error "Windows is not supported by Clam driver yet."
 #endif
 
-#define WORK_ARRAY_SIZE 10
+#define WORK_ARRAY_SIZE 80
+#define CONTROLLER_QUEUE_TARGET_SIZE 30
 
-struct clam_info
+struct channel_info
 {
 	int chip_count;
 	int core_count;
 	unsigned char core_map[CLAM_MAX_CHIP_COUNT];
-	bool chip_bypass[CLAM_MAX_CHIP_COUNT];
 	uint32_t last_nonce;
-	struct work *work_array[WORK_ARRAY_SIZE];
-	bool has_queued_work;
-	int array_top;
-	
-	struct timeval core_last_nonce[CLAM_MAX_CHIP_COUNT * 8];
-
-	struct timeval tv_work_start;
-	
 	int cont_timeout;
+};
 
-	int work_count_total;
-	int timeout_total;
-	int period_timeout;
+struct clam_info
+{
+	struct work *work_array[WORK_ARRAY_SIZE];
+	int array_top;
+
+	int channel_count;
+	struct channel_info channels[4];
+	
+	int controller_queue_size;
 };
 
 char *set_clam_clock(char *arg);
