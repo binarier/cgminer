@@ -13,14 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <termios.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
-#include <sys/mman.h>
 
 #include "logging.h"
 
@@ -610,6 +605,14 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 		return false;
 	}
 	
+	char buf[100];
+	int read;
+	memset(buf, 0, sizeof(buf));
+	int ret = usb_transfer_read(cgpu, LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN, 0x10, 0, 0, buf, 100, &read, C_CLAM_READ_DATA);
+	applog(LOG_ERR, "ret:%d", ret);
+	applog(LOG_ERR, "read:%d", read);
+	applog(LOG_ERR, "version:%s", buf);
+
 	return true;
 }
 
