@@ -116,6 +116,35 @@ static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned
 	return true;
 }
 
+
+static bool reset_channel(struct cgpu_info *cgpu, uint8_t channel_id)
+{
+	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CHANNEL, 0, channel_id, C_CLAM_RESET_CHANNEL);
+	if (ret != LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "[Clam] reset controller failed, %d", ret);
+		return false;
+	}
+	ret = usb_transfer(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CLOCK, opt_clam_clock, channel_id, C_CLAM_CLOCK);
+	if (ret != LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "[Clam] channel %d : set clock error - [%d], ignored.", channel_id, ret);
+		return false;
+	}
+
+	return true;
+}
+
+static bool reset_controller(struct cgpu_info *cgpu)
+{
+	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CONTROLLER, 0, 0, C_CLAM_RESET_CONTROLLER);
+	if (ret != LIBUSB_SUCCESS)
+	{
+		applog(LOG_ERR, "[Clam] reset controller failed, %d", ret);
+		return false;
+	}
+	return true;
+}
 static bool clam_init(struct cgpu_info *cgpu)
 {
 	struct clam_info *info = cgpu->device_data;
@@ -179,37 +208,9 @@ static bool clam_init(struct cgpu_info *cgpu)
 		}
 	}
 
+
+//	reset_controller(cgpu);
 	flush_result(cgpu);
-
-	return true;
-}
-
-static bool reset_channel(struct cgpu_info *cgpu, uint8_t channel_id)
-{
-	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CHANNEL, 0, channel_id, C_CLAM_RESET_CHANNEL);
-	if (ret != LIBUSB_SUCCESS)
-	{
-		applog(LOG_ERR, "[Clam] reset controller failed, %d", ret);
-		return false;
-	}
-	ret = usb_transfer(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CLOCK, opt_clam_clock, channel_id, C_CLAM_CLOCK);
-	if (ret != LIBUSB_SUCCESS)
-	{
-		applog(LOG_ERR, "[Clam] channel %d : set clock error - [%d], ignored.", channel_id, ret);
-		return false;
-	}
-
-	return true;
-}
-
-static bool reset_controller(struct cgpu_info *cgpu)
-{
-	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CONTROLLER, 0, 0, C_CLAM_RESET_CONTROLLER);
-	if (ret != LIBUSB_SUCCESS)
-	{
-		applog(LOG_ERR, "[Clam] reset controller failed, %d", ret);
-		return false;
-	}
 	return true;
 }
 
@@ -264,7 +265,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		return -1;
 
 	struct clam_result result;
-	if (unlikely(!clam_read_result(cgpu, &result, 20000)))	// 2s is long enough for single core to respond or timeout
+	if (unlikely(!clam_read_result(cgpu, &result, 2000)))	// 2s is long enough for single core to respond or timeout
 	{
 		applog(LOG_ERR, "[Clam] controller failure, reset all");
 
@@ -311,12 +312,11 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			}
 
 			//estimate the hashes
-			int range = 0x10000 / ch_info->core_count;
-			int64_t hashes;
-			hashes = (result.result >> 16) % range - (ch_info->last_nonce >> 16) % range;
-			hashes = (hashes + range) % range;
-			hashes <<= 16;
-			hashes = hashes + (result.result & 0xffff) - (ch_info->last_nonce & 0xffff);
+			int64_t last_nonce = ch_info->last_nonce;
+			int64_t new_nonce = result.result;
+			int64_t range_width = 0xffff / ch_info->core_count + 1;
+			range_width <<= 16;
+			int64_t hashes = (new_nonce % range_width + range_width - last_nonce % range_width) % range_width;
 			hashes *= ch_info->core_count;
 
 			ch_info->last_nonce = result.result;
@@ -335,7 +335,8 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				applog(LOG_ERR, "[Clam] continous timeout, reinit channel %d", result.channel_id);
 				reset_channel(cgpu, result.channel_id);
 			}
-			return 0x100000000;
+			ch_info->last_nonce = 0;
+			return 0x100000000ll;
 		}
 		else
 		{
