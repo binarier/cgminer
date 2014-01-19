@@ -209,7 +209,6 @@ static bool clam_init(struct cgpu_info *cgpu)
 	}
 
 
-//	reset_controller(cgpu);
 	flush_result(cgpu);
 	return true;
 }
@@ -255,6 +254,10 @@ static void clam_detect(void)
 	usb_detect(&clam_drv, clam_detect_one);
 }
 
+int cn = 0;
+int ct = 0;
+int cw = 0;
+
 static int64_t clam_scanwork(struct thr_info *thr)
 {
 	struct cgpu_info *cgpu = thr->cgpu;
@@ -263,6 +266,14 @@ static int64_t clam_scanwork(struct thr_info *thr)
 
 	if (cgpu->usbinfo.nodev)
 		return -1;
+
+//	if (cw % 50 == 0)
+//	{
+//		uint32_t n,r;
+//		usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, &n, sizeof(n), &r, C_CLAM_CHANNELS);
+//
+//		applog(LOG_ERR, "[Clam Debug] cw:%d, cn:%d, ct:%d, workqueue:%d", cw, cn, ct, n);
+//	}
 
 	struct clam_result result;
 	if (unlikely(!clam_read_result(cgpu, &result, 2000)))	// 2s is long enough for single core to respond or timeout
@@ -277,6 +288,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		struct channel_info *ch_info = &info->channels[result.channel_id];
 		if (result.type == CLAM_RESULT_TYPE_NONCE)
 		{
+			cn++;
 			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
 			ch_info->cont_timeout = 0;
 			ch_info->cont_hw = 0;
@@ -336,7 +348,8 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				reset_channel(cgpu, result.channel_id);
 			}
 			ch_info->last_nonce = 0;
-			return 0x100000000ll;
+			ct++;
+			return 0x100000000 / 2;
 		}
 		else
 		{
@@ -361,6 +374,7 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 		work_completed(cgpu, work);
 		return false;
 	}
+	cw++;
 	info->controller_queue_size++;
 	
 	if (info->array_top == WORK_ARRAY_SIZE)
