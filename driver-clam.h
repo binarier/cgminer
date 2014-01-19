@@ -47,13 +47,33 @@
 #define WORK_ARRAY_SIZE 80
 #define CONTROLLER_QUEUE_TARGET_SIZE 30
 
+#define CLAM_TYPE_IN (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN)
+#define CLAM_TYPE_OUT (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_OUT)
+
+// out
+#define CLAM_REQUEST_RESET_CONTROLLER				0x00
+#define CLAM_REQUEST_RESET_CHANNEL					0x01	//index - channel_id
+#define CLAM_REQUEST_PLL							0x02	//value[7:0] - m, value[15:8] - n, value[23:16] - od, index - channel_id
+#define CLAM_REQUEST_CLOCK							0x03	//value - frequency in MHz, index - channel_id
+#define CLAM_REQUEST_IDENTIFY						0x04
+#define CLAM_REQUEST_FLUSH_WORK						0x05
+#define CLAM_REQUEST_FLUSH_RESULT					0x06
+
+//in
+#define CLAM_REQUEST_VERSION						0x10
+#define CLAM_REQUEST_CHANNELS						0x11
+#define CLAM_REQUEST_CORES							0x12	//index for channel_id
+
+#define CLAM_MAX_CHANNELS 40
+
 struct channel_info
 {
 	int chip_count;
 	int core_count;
-	unsigned char core_map[CLAM_MAX_CHIP_COUNT];
+	uint8_t core_map[CLAM_MAX_CHIP_COUNT];
 	uint32_t last_nonce;
 	int cont_timeout;
+	int cont_hw;
 };
 
 struct clam_info
@@ -61,10 +81,20 @@ struct clam_info
 	struct work *work_array[WORK_ARRAY_SIZE];
 	int array_top;
 
-	int channel_count;
-	struct channel_info channels[4];
+	uint32_t channel_count;
+	struct channel_info channels[CLAM_MAX_CHANNELS];
 	
 	int controller_queue_size;
+};
+
+#define CLAM_RESULT_TYPE_NONCE		0x00
+#define CLAM_RESULT_TYPE_TIMEOUT	0xff
+struct clam_result
+{
+	uint8_t channel_id;
+	uint8_t type;
+	uint16_t reserved;
+	uint32_t result;
 };
 
 char *set_clam_clock(char *arg);
