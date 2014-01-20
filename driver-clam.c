@@ -35,13 +35,13 @@ bool opt_clam_no_test = false;
 uint8_t golden_midstate[] = { 0x46,0x79,0xba,0x4e,0xc9,0x98,0x76,0xbf,0x4b,0xfe,0x08,0x60,0x82,0xb4,0x00,0x25,0x4d,0xf6,0xc3,0x56,0x45,0x14,0x71,0x13,0x9a,0x3a,0xfa,0x71,0xe4,0x8f,0x54,0x4a};
 uint8_t golden_data[] = {0x87, 0x32, 0x0b, 0x1a, 0x14, 0x26, 0x67, 0x4f, 0x2f, 0xa7, 0x22, 0xce};
 
-static void flush_buffer(struct cgpu_info *bitfury)
+static void flush_buffer(struct cgpu_info *cgpu)
 {
 	char buf[512];
 	int amount;
 
 	do {
-		usb_read_once(bitfury, buf, 512, &amount, C_CLAM_FLUSH_BUFFER);
+		usb_read_once(cgpu, buf, 512, &amount, C_CLAM_FLUSH_BUFFER);
 	} while (amount);
 }
 
@@ -239,6 +239,9 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 		return false;
 	}
 	
+	usb_buffer_enable(cgpu);
+
+
 	if (!clam_init(cgpu))
 	{
 		usb_uninit(cgpu);
@@ -402,6 +405,7 @@ static void clam_flush_work(struct cgpu_info *cgpu)
 	if (ret != LIBUSB_SUCCESS)
 		applog(LOG_ERR, "[Clam] flush work failed, %d", ret);
 	info->controller_queue_size = 0;
+	flush_buffer(cgpu);
 }
 
 static void clam_thread_shutdown(struct thr_info *thr)
