@@ -239,7 +239,7 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 		return false;
 	}
 	
-	usb_buffer_enable(cgpu);
+	//usb_buffer_enable(cgpu);
 
 
 	if (!clam_init(cgpu))
@@ -405,7 +405,7 @@ static void clam_flush_work(struct cgpu_info *cgpu)
 	if (ret != LIBUSB_SUCCESS)
 		applog(LOG_ERR, "[Clam] flush work failed, %d", ret);
 	info->controller_queue_size = 0;
-	flush_buffer(cgpu);
+	//flush_buffer(cgpu);
 }
 
 static void clam_thread_shutdown(struct thr_info *thr)
