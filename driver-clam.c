@@ -295,8 +295,6 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		{
 			cn++;
 			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
-			ch_info->cont_timeout = 0;
-			ch_info->cont_hw = 0;
 
 			//try submit
 			int i;
@@ -310,6 +308,8 @@ static int64_t clam_scanwork(struct thr_info *thr)
 					if (!submit_nonce(thr, info->work_array[i], result.result))
 						applog(LOG_ERR, "[Clam] unexpceted submit failure.");
 					found = true;
+					ch_info->cont_timeout = 0;
+					ch_info->cont_hw = 0;
 
 					break;
 				}
@@ -321,7 +321,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				ch_info->cont_hw++;
 				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", result.result);
 
-				if (ch_info->cont_hw > 4)
+				if (ch_info->cont_hw > 10)
 				{
 					applog(LOG_ERR, "[Clam] continous HW error, reset channel %d", result.channel_id);
 					reset_channel(cgpu, result.channel_id);
