@@ -231,7 +231,6 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 	cgpu->drv = &clam_drv;
 	cgpu->device_data = info;
 	cgpu->threads = 1;
-	add_cgpu(cgpu);
 
 	if (!usb_init(cgpu, dev, found))
 	{
@@ -248,9 +247,11 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 	{
 		usb_uninit(cgpu);
 		free(info);
+		cgpu->device_data = NULL;
 		usb_free_cgpu(cgpu);
 		return false;
 	}
+	add_cgpu(cgpu);
 	return true;
 }
 
