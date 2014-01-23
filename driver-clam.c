@@ -323,12 +323,13 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				submit_nonce(thr, info->work_array[0], result.result);
 				ch_info->cont_hw++;
 				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", result.result);
-
+/*
 				if (ch_info->cont_hw > 20)
 				{
 					applog(LOG_ERR, "[Clam] continous HW error, reset channel %d", result.channel_id);
 					reset_channel(cgpu, result.channel_id);
 				}
+*/
 			}
 
 			//estimate the hashes
@@ -349,12 +350,13 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			//applog(LOG_ERR, "[Clam Debug] got timeout");
 			info->controller_queue_size -= 2;
 			ch_info->cont_timeout++;
-
+/*
 			if (ch_info->cont_timeout > 40)
 			{
 				applog(LOG_ERR, "[Clam] continous timeout, reinit channel %d", result.channel_id);
 				reset_channel(cgpu, result.channel_id);
 			}
+*/
 			ch_info->last_nonce = 0;
 			ct++;
 			return 0x100000000 / 2;
