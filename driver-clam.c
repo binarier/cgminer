@@ -119,6 +119,7 @@ static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned
 
 static bool reset_channel(struct cgpu_info *cgpu, uint8_t channel_id)
 {
+	struct clam_info *info = cgpu->device_data;
 	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CHANNEL, 0, channel_id, C_CLAM_RESET_CHANNEL);
 	if (ret != LIBUSB_SUCCESS)
 	{
@@ -131,7 +132,8 @@ static bool reset_channel(struct cgpu_info *cgpu, uint8_t channel_id)
 		applog(LOG_ERR, "[Clam] channel %d : set clock error - [%d], ignored.", channel_id, ret);
 		return false;
 	}
-
+	info->channels[channel_id].cont_hw = 0;	
+	info->channels[channel_id].cont_timeout = 0;	
 	return true;
 }
 
@@ -322,7 +324,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				ch_info->cont_hw++;
 				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", result.result);
 
-				if (ch_info->cont_hw > 10)
+				if (ch_info->cont_hw > 20)
 				{
 					applog(LOG_ERR, "[Clam] continous HW error, reset channel %d", result.channel_id);
 					reset_channel(cgpu, result.channel_id);
@@ -430,11 +432,33 @@ char *set_clam_clock(char *arg)
 	return NULL;
 }
 
+static struct api_data *clam_api_stats(struct cgpu_info *cgpu)
+{
+        struct clam_info *info = cgpu->device_data;
+        struct api_data *root = NULL;
+        int i;
+        char buf1[50], buf2[100];
+
+        for (i=0; i<info->channel_count; i++)
+        {
+        	sprintf(buf1, "Channel%d", i);
+        	sprintf(buf2, "%d chips %d cores core map %s",
+        			info->channels[i].chip_count,
+        			info->channels[i].core_count,
+        			bin2hex(info->channels[i].core_map, info->channels[i].chip_count));
+        	root = api_add_string(root, buf1, buf2, true);
+        }
+
+        return root;
+}
+
+
 struct device_drv clam_drv = {
 	.drv_id = DRIVER_CLAM,
 	.dname = "clam",
 	.name = "CM",
 	.drv_detect = clam_detect,
+	.get_api_stats = clam_api_stats,
 	.hash_work = hash_queued_work,
 	.scanwork = clam_scanwork,
 	.queue_full = clam_queue_full,
