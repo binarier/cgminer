@@ -79,6 +79,7 @@ struct channel_info
 
 struct clam_info
 {
+	char firmware_version[100];
 	struct work *work_array[WORK_ARRAY_SIZE];
 	int array_top;
 

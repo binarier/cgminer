@@ -153,6 +153,8 @@ static bool clam_init(struct cgpu_info *cgpu)
 	char buf[64 + 1];
 	int read;
 
+	memset(info, 0, sizeof(*info));
+
 	//identify version
 	int ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_VERSION, 0, 0, buf, sizeof(buf), &read, C_CLAM_VERSION);
 	if (ret != LIBUSB_SUCCESS)
@@ -163,6 +165,7 @@ static bool clam_init(struct cgpu_info *cgpu)
 		applog(LOG_ERR, "[Clam] device version not match - [%s], ignored.", buf);
 		return false;
 	}
+	strcpy(info->firmware_version, buf+10);
 	applog(LOG_NOTICE, "[Clam] found device [%s]", buf);
 
 	//identify channels
@@ -262,10 +265,6 @@ static void clam_detect(void)
 	usb_detect(&clam_drv, clam_detect_one);
 }
 
-//int cn = 0;
-//int ct = 0;
-//int cw = 0;
-
 static int64_t clam_scanwork(struct thr_info *thr)
 {
 	struct cgpu_info *cgpu = thr->cgpu;
@@ -274,17 +273,8 @@ static int64_t clam_scanwork(struct thr_info *thr)
 
 	if (cgpu->usbinfo.nodev)
 		return -1;
-/*
-	if (cw % 50 == 0)
-	{
-		uint32_t n,r;
-		usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, &n, sizeof(n), &r, C_CLAM_CHANNELS);
-
-		applog(LOG_ERR, "[Clam Debug] cw:%d, cn:%d, ct:%d, workqueue:%d", cw, cn, ct, n);
-	}
-*/
 	struct clam_result result;
-	if (unlikely(!clam_read_result(cgpu, &result, 2000)))	// 2s is long enough for single core to respond or timeout
+	if (unlikely(!clam_read_result(cgpu, &result, 5000)))	// 5s is long enough for even a full controller reset
 	{
 		applog(LOG_ERR, "[Clam] controller failure, reset all");
 
@@ -296,7 +286,6 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		struct channel_info *ch_info = &info->channels[result.channel_id];
 		if (result.type == CLAM_RESULT_TYPE_NONCE)
 		{
-		//	cn++;
 			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
 
 			//try submit
@@ -323,13 +312,12 @@ static int64_t clam_scanwork(struct thr_info *thr)
 				submit_nonce(thr, info->work_array[0], result.result);
 				ch_info->cont_hw++;
 				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", result.result);
-/*
 				if (ch_info->cont_hw > 20)
 				{
 					applog(LOG_ERR, "[Clam] continous HW error, reset channel %d", result.channel_id);
-					reset_channel(cgpu, result.channel_id);
+					thr->work_restart = true;
+					return 0;
 				}
-*/
 			}
 
 			//estimate the hashes
@@ -350,15 +338,14 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			//applog(LOG_ERR, "[Clam Debug] got timeout");
 			info->controller_queue_size -= 2;
 			ch_info->cont_timeout++;
-/*
 			if (ch_info->cont_timeout > 40)
 			{
 				applog(LOG_ERR, "[Clam] continous timeout, reinit channel %d", result.channel_id);
-				reset_channel(cgpu, result.channel_id);
+				thr->work_restart = true;
+				return 0;
+
 			}
-*/
 			ch_info->last_nonce = 0;
-		//	ct++;
 			return 0x100000000 / 2;
 		}
 		else
@@ -419,11 +406,18 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 static void clam_flush_work(struct cgpu_info *cgpu)
 {
 	struct clam_info *info = cgpu->device_data;
-	applog(LOG_DEBUG, "[Clam] flush work");
-	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_FLUSH_WORK, 0, 0, C_CLAM_FLUSH_WORK);
-	if (ret != LIBUSB_SUCCESS)
-		applog(LOG_ERR, "[Clam] flush work failed, %d", ret);
-	info->controller_queue_size = 0;
+	if (strcmp(info->firmware_version, "1.0.0.0"))
+	{
+		applog(LOG_NOTICE, "[Clam] flush work queue");
+		int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_FLUSH_WORK, 0, 0, C_CLAM_FLUSH_WORK);
+		if (ret != LIBUSB_SUCCESS)
+			applog(LOG_ERR, "[Clam] flush failed, %d", ret);
+		info->controller_queue_size = 0;
+	}
+	else
+	{
+		clam_reinit(cgpu);
+	}
 	//flush_buffer(cgpu);
 }
 
