@@ -321,17 +321,24 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			}
 
 			//estimate the hashes
-			int64_t last_nonce = ch_info->last_nonce;
-			int64_t new_nonce = result.result;
-			int64_t range_width = 0xffff / ch_info->core_count + 1;
-			range_width <<= 16;
-			int64_t hashes = (new_nonce % range_width + range_width - last_nonce % range_width) % range_width;
-			hashes *= ch_info->core_count;
+			if (ch_info->core_count)
+			{
+				int64_t last_nonce = ch_info->last_nonce;
+				int64_t new_nonce = result.result;
+				int64_t range_width = 0xffff / ch_info->core_count + 1;
+				range_width <<= 16;
+				int64_t hashes = (new_nonce % range_width + range_width - last_nonce % range_width) % range_width;
+				hashes *= ch_info->core_count;
 
-			ch_info->last_nonce = result.result;
-			info->controller_queue_size--;
+				ch_info->last_nonce = result.result;
+				info->controller_queue_size--;
 
-			return hashes;
+				return hashes;
+			}
+			else
+			{
+				return 0;
+			}
 		}
 		else if (result.type == CLAM_RESULT_TYPE_TIMEOUT)
 		{
@@ -406,7 +413,7 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 static void clam_flush_work(struct cgpu_info *cgpu)
 {
 	struct clam_info *info = cgpu->device_data;
-	if (strcmp(info->firmware_version, "1.0.0.0"))
+	if (strcmp(info->firmware_version, "1.0.0.0") == 0)
 	{
 		applog(LOG_NOTICE, "[Clam] flush work queue");
 		int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_FLUSH_WORK, 0, 0, C_CLAM_FLUSH_WORK);
