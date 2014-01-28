@@ -216,12 +216,19 @@ static bool clam_init(struct cgpu_info *cgpu)
 	if (opt_clam_test_only)
 		return false;
 
-	flush_result(cgpu);
+	//flush_result(cgpu);
 	return true;
 }
 
 static void clam_reinit(struct cgpu_info  *cgpu)
 {
+	//clean the queued work
+	struct clam_info *info = cgpu->device_data;
+	int i;
+	for (i=0;i<info->array_top;i++)
+		work_completed(cgpu, info->work_array[i]);
+	info->array_top = 0;
+
 	reset_controller(cgpu);
 	clam_init(cgpu);
 }
@@ -319,8 +326,8 @@ static int64_t clam_scanwork(struct thr_info *thr)
 					return 0;
 				}
 			}
-
 			//estimate the hashes
+
 			if (ch_info->core_count)
 			{
 				int64_t last_nonce = ch_info->last_nonce;
