@@ -233,7 +233,7 @@ static void clam_reinit(struct cgpu_info  *cgpu)
 	clam_init(cgpu);
 }
 
-static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *found)
+static struct cgpu_info *clam_detect_one(struct libusb_device *dev, struct usb_find_devices *found)
 {
 	struct cgpu_info *cgpu;
 	struct clam_info *info = calloc(1, sizeof(*info));
@@ -252,22 +252,17 @@ static bool clam_detect_one(struct libusb_device *dev, struct usb_find_devices *
 		return false;
 	}
 	
-	//usb_buffer_enable(cgpu);
-
-
 	if (!clam_init(cgpu))
 	{
 		usb_uninit(cgpu);
 		free(info);
 		cgpu->device_data = NULL;
-		usb_free_cgpu(cgpu);
-		return false;
+		return usb_free_cgpu(cgpu);
 	}
-	add_cgpu(cgpu);
-	return true;
+	return cgpu;
 }
 
-static void clam_detect(void)
+static void clam_detect(bool hotplug)
 {
 	usb_detect(&clam_drv, clam_detect_one);
 }
@@ -476,7 +471,7 @@ static struct api_data *clam_api_stats(struct cgpu_info *cgpu)
 
 
 struct device_drv clam_drv = {
-	.drv_id = DRIVER_CLAM,
+	.drv_id = DRIVER_clam,
 	.dname = "clam",
 	.name = "CM",
 	.drv_detect = clam_detect,

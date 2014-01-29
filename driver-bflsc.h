@@ -59,6 +59,7 @@ enum driver_version {
 #define BFLSC_DI_DEVICESINCHAIN "DEVICES IN CHAIN"
 #define BFLSC_DI_CHAINPRESENCE "CHAIN PRESENCE MASK"
 #define BFLSC_DI_CHIPS "CHIP PARALLELIZATION"
+#define BFLSC_DI_CHIPS_PARALLEL "YES"
 
 #define FULLNONCE 0x100000000ULL
 
@@ -138,6 +139,8 @@ struct bflsc_info {
 	int que_noncecount;
 	int que_fld_min;
 	int que_fld_max;
+	int core_nonces[17];
+	int core_hw[17];
 	int flush_size;
 	// count of given size, [+2] is for any > QUE_MAX_RESULTS
 	uint64_t result_size[QUE_MAX_RESULTS+2];
@@ -345,8 +348,10 @@ struct SaveString {
 #define BFLSC_QUE_WATERMARK_V2 32
 #define BFLSC_QUE_LOW_V2 16
 
-#define BFLSC_TEMP_OVERHEAT 90
-// Must drop this far below cutoff before resuming work
+#define BFLSC_TEMP_OVERHEAT 85
+// Will start throttling this much below overheat
+#define BFLSC_TEMP_THROTTLE 3
+// Must drop this far below overheat before resuming work
 #define BFLSC_TEMP_RECOVER 5
 
 // If initialisation fails the first time,

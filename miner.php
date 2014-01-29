@@ -2385,7 +2385,7 @@ function ss($a, $b)
  $la = strlen($a);
  $lb = strlen($b);
  if ($la != $lb)
-	return $la - $lb;
+	return $lb - $la;
  return strcmp($a, $b);
 }
 #
@@ -2910,7 +2910,7 @@ function display()
 
  if ($allowcustompages === true)
  {
-	$pg = trim(getparam('pg', true));
+	$pg = urlencode(trim(getparam('pg', true)));
 	if ($pagesonly === true)
 	{
 		if ($pg !== null && $pg !== '')
