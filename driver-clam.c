@@ -248,18 +248,22 @@ static struct cgpu_info *clam_detect_one(struct libusb_device *dev, struct usb_f
 	{
 		applog(LOG_ERR, "[Clam] usb init failed");
 		free(info);
-		usb_free_cgpu(cgpu);
-		return false;
+		return usb_free_cgpu(cgpu);
 	}
 	
 	if (!clam_init(cgpu))
-	{
-		usb_uninit(cgpu);
-		free(info);
-		cgpu->device_data = NULL;
-		return usb_free_cgpu(cgpu);
-	}
+		goto failed;
+
+	if (!add_cgpu(cgpu))
+		goto failed;
+
 	return cgpu;
+
+	failed:
+	usb_uninit(cgpu);
+	free(info);
+	cgpu->device_data = NULL;
+	return usb_free_cgpu(cgpu);
 }
 
 static void clam_detect(bool hotplug)
