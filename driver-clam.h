@@ -101,9 +101,6 @@ struct clam_result
 };
 
 char *set_clam_clock(char *arg);
-extern int opt_clam_core_limit;
-extern int opt_clam_chip_start;
-extern int opt_clam_chip_end;
 extern bool opt_clam_test_only;
 
 
