@@ -266,6 +266,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	else
 	{
 		struct channel_info *ch_info = &info->channels[result.channel_id];
+		result.result = be32toh(result.result);
 		if (result.type == CLAM_RESULT_TYPE_NONCE)
 		{
 			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
