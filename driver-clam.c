@@ -218,6 +218,8 @@ static struct cgpu_info *clam_detect_one(struct libusb_device *dev, struct usb_f
 	
 	reset_controller(cgpu);
 
+	usb_buffer_clear(cgpu);
+
 	if (!clam_init(cgpu))
 		goto failed;
 
@@ -247,7 +249,14 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	if (cgpu->usbinfo.nodev)
 		return -1;
 	struct clam_result result;
-	if (unlikely(!clam_read_result(cgpu, &result, 5000)))	// 5s is long enough for even a full controller reset
+	int read;
+	int err = usb_read_once(cgpu, (char *)&result, sizeof(result), &read, C_CLAM_READ_DATA);
+	if (err == LIBUSB_ERROR_TIMEOUT)
+	{
+		cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * CONTROLLER_QUEUE_TARGET_SIZE / 2);
+		return 0;
+	}
+	if (err != LIBUSB_SUCCESS || read != sizeof(result))
 	{
 		applog(LOG_ERR, "[Clam] controller failure, reset all");
 
