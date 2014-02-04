@@ -248,39 +248,50 @@ static int64_t clam_scanwork(struct thr_info *thr)
 
 	if (cgpu->usbinfo.nodev)
 		return -1;
-	struct clam_result result;
+	struct clam_result result[8];
 	int read;
-	int err = usb_read_once(cgpu, (char *)&result, sizeof(result), &read, C_CLAM_READ_DATA);
+	char buf[64];
+	//int err =usb_read_timeout(cgpu, buf, sizeof(buf), &read, 10000, C_CLAM_READ_DATA);
+	int err = usb_read_once(cgpu, (char *)result, sizeof(result), &read, C_CLAM_READ_DATA);
 	if (err == LIBUSB_ERROR_TIMEOUT)
 	{
-		cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * CONTROLLER_QUEUE_TARGET_SIZE / 2);
+		//cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * CONTROLLER_QUEUE_TARGET_SIZE / 2);
+		cgsleep_us(100000);
 		return 0;
 	}
-	if (err != LIBUSB_SUCCESS || read != sizeof(result))
+	if (err != LIBUSB_SUCCESS)
 	{
-		applog(LOG_ERR, "[Clam] controller failure, reset all");
+		applog(LOG_ERR, "[Clam] controller failure, reset all, read:%d, err:%d", read, err);
 
 		thr->work_restart = true;
 		return 0;
 	}
-	else
+	if (usb_buffer_size(cgpu) > 0)
 	{
-		struct channel_info *ch_info = &info->channels[result.channel_id];
-		result.result = be32toh(result.result);
-		if (result.type == CLAM_RESULT_TYPE_NONCE)
+		applog(LOG_ERR, "[Clam Debug] buffer size : %d", usb_buffer_size(cgpu));
+	}
+	
+	int r;
+	int64_t total_hashes = 0;
+	for (r=0;r<read/sizeof(struct clam_result);r++)
+	{
+		struct channel_info *ch_info = &info->channels[result[r].channel_id];
+		if (result[r].type == CLAM_RESULT_TYPE_NONCE)
 		{
-			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", result.result);
-
+			uint32_t nonce = be32toh(result[r].result);
+			info->controller_queue_size = result[r].queue_size;
+			//applog(LOG_ERR, "[Clam Debug] queue size:%d", info->controller_queue_size);
+			applog(LOG_DEBUG, "[Clam] nonce found [%08x]", nonce);
 			//try submit
 			int i;
 			bool found = false;
 			for (i = 0; i< info->array_top - 1; i++)
 			{
-				if (test_nonce(info->work_array[i], result.result))
+				if (test_nonce(info->work_array[i], nonce))
 				{
 					//if (i > 5)
 						//applog(LOG_ERR, "[Clam] Submit for work %d, %08x", i, nonce);
-					if (!submit_nonce(thr, info->work_array[i], result.result))
+					if (!submit_nonce(thr, info->work_array[i], nonce))
 						applog(LOG_ERR, "[Clam] unexpceted submit failure.");
 					found = true;
 					ch_info->cont_timeout = 0;
@@ -292,60 +303,27 @@ static int64_t clam_scanwork(struct thr_info *thr)
 			if (!found)
 			{
 				//must submit for the HW count
-				submit_nonce(thr, info->work_array[0], result.result);
+				submit_nonce(thr, info->work_array[0], nonce);
 				ch_info->cont_hw++;
-				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", result.result);
+				applog(LOG_DEBUG, "[Clam] HW error, reset all, %08x", nonce);
 				if (ch_info->cont_hw > 20)
 				{
-					applog(LOG_WARNING, "[Clam] continous HW error, reset channel %d", result.channel_id);
+					applog(LOG_WARNING, "[Clam] continous HW error, reset channel %d", result[r].channel_id);
 					ch_info->cont_hw = 0;
 					//thr->work_restart = true;
-					return 0;
 				}
-			}
-			//estimate the hashes
-
-			if (ch_info->core_count)
-			{
-				int64_t last_nonce = ch_info->last_nonce;
-				int64_t new_nonce = result.result;
-				int64_t range_width = 0xffff / ch_info->core_count + 1;
-				range_width <<= 16;
-				int64_t hashes = (new_nonce % range_width + range_width - last_nonce % range_width) % range_width;
-				hashes *= ch_info->core_count;
-
-				ch_info->last_nonce = result.result;
-				info->controller_queue_size--;
-
-				return hashes;
 			}
 			else
 			{
-				return 0;
+				total_hashes += 0xffffffff;
 			}
-		}
-		else if (result.type == CLAM_RESULT_TYPE_TIMEOUT)
-		{
-			//applog(LOG_ERR, "[Clam Debug] got timeout");
-			info->controller_queue_size -= 2;
-			ch_info->cont_timeout++;
-			if (ch_info->cont_timeout > 40)
-			{
-				applog(LOG_WARNING, "[Clam] continous timeout, reinit channel %d", result.channel_id);
-				ch_info->cont_timeout = 0;
-				//thr->work_restart = true;
-				return 0;
-
-			}
-			ch_info->last_nonce = 0;
-			return 0x100000000 / 2;
 		}
 		else
 		{
-			applog(LOG_ERR, "[Clam] Protocol error : %08x", result.type);
-			return 0;
+			applog(LOG_ERR, "[Clam] Protocol error : %08x", result[r].type);
 		}
 	}
+	return total_hashes;
 }
 
 static bool clam_queue_full(struct cgpu_info *cgpu)

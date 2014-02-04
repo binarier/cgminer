@@ -45,7 +45,7 @@
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
 #define WORK_ARRAY_SIZE 120
-#define CONTROLLER_QUEUE_TARGET_SIZE 20 
+#define CONTROLLER_QUEUE_TARGET_SIZE 60 
 
 #define CLAM_TYPE_IN (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN)
 #define CLAM_TYPE_OUT (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_OUT)
@@ -91,12 +91,13 @@ struct clam_info
 };
 
 #define CLAM_RESULT_TYPE_NONCE		0x00
-#define CLAM_RESULT_TYPE_TIMEOUT	0xff
+#define CLAM_RESULT_TYPE_QUEUE		0x01
 struct clam_result
 {
 	uint8_t channel_id;
 	uint8_t type;
-	uint16_t reserved;
+	uint8_t queue_size;
+	uint8_t reserved;
 	uint32_t result;
 };
 
