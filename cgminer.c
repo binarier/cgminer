@@ -1242,6 +1242,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--clam-test-only",
 			opt_set_bool, &opt_clam_test_only,
 			"No core test work "),
+	OPT_WITH_ARG("--clam-queue",
+		     opt_set_intval, NULL, &opt_clam_queue,
+		     "Set Clam Controller queue size"),
 #endif
 #ifdef USE_HASHFAST
 	OPT_WITHOUT_ARG("--hfa-dfu-boot",

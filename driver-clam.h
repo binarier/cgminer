@@ -45,7 +45,6 @@
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
 #define WORK_ARRAY_SIZE 120
-#define CONTROLLER_QUEUE_TARGET_SIZE 60 
 
 #define CLAM_TYPE_IN (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN)
 #define CLAM_TYPE_OUT (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_OUT)
@@ -103,6 +102,7 @@ struct clam_result
 
 char *set_clam_clock(char *arg);
 extern bool opt_clam_test_only;
+extern int opt_clam_queue;
 
 
 

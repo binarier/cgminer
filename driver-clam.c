@@ -28,7 +28,7 @@
 struct device_drv clam_drv;
 
 int opt_clam_clock = CLAM_DEFAULT_CLOCK;
-int opt_clam_core_limit = CLAM_MAX_CORE_COUNT;
+int opt_clam_queue = 60;
 bool opt_clam_test_only = false;
 
 static bool clam_read_result(struct cgpu_info *cgpu, struct clam_result *result, int ms_timeout)
@@ -255,7 +255,7 @@ static int64_t clam_scanwork(struct thr_info *thr)
 	int err = usb_read_once(cgpu, (char *)result, sizeof(result), &read, C_CLAM_READ_DATA);
 	if (err == LIBUSB_ERROR_TIMEOUT)
 	{
-		//cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * CONTROLLER_QUEUE_TARGET_SIZE / 2);
+		//cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * opt_clam_queue / 2);
 		cgsleep_us(100000);
 		return 0;
 	}
@@ -370,7 +370,7 @@ static bool clam_queue_full(struct cgpu_info *cgpu)
 	}	
 		
 
-	return info->controller_queue_size >= CONTROLLER_QUEUE_TARGET_SIZE;
+	return info->controller_queue_size >= opt_clam_queue;
 }
 
 static void clam_flush_work(struct cgpu_info *cgpu)
