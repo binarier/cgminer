@@ -44,25 +44,54 @@
 #define CLAM_GC_LOOP_DOWN_M		0x40		//Down loop for DN_MREQ and DN_MACK
 #define CLAM_GC_LOOP_DOWN_S		0x80		//Down loop for DN_SREQ and DN_SACK
 
-#define WORK_ARRAY_SIZE 120
+#define WORK_ARRAY_SIZE 200
 
 #define CLAM_TYPE_IN (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN)
 #define CLAM_TYPE_OUT (LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_OUT)
 
 // out
-#define CLAM_REQUEST_RESET_CONTROLLER				0x00
-#define CLAM_REQUEST_RESET_CHANNEL					0x01	//index - channel_id
-#define CLAM_REQUEST_PLL							0x02	//value[7:0] - m, value[15:8] - n, value[23:16] - od, index - channel_id
-#define CLAM_REQUEST_CLOCK							0x03	//value - frequency in MHz, index - channel_id
+#define CLAM_REQUEST_RESET_CONTROLLER		0x00
+
+//index[15:8] : miner_id
+//index[7:0]  : channel_id
+#define CLAM_REQUEST_RESET_CHANNEL			0x01
+
+//index[15:8] : miner_id
+//index[7:0]  : channel_id
+//value[23:16]: od
+//value[15:8] : n
+//value[7:0]  : m
+#define CLAM_REQUEST_PLL								0x02
+
+//index[15:8] : miner_id
+//index[7:0]  : channel_id
+//value       : frequency in MHz
+#define CLAM_REQUEST_CLOCK							0x03
+
+//index[15:8] : miner_id
 #define CLAM_REQUEST_IDENTIFY						0x04
-#define CLAM_REQUEST_FLUSH_WORK						0x05
-#define CLAM_REQUEST_FLUSH_RESULT					0x06
+
+#define CLAM_REQUEST_FLUSH_WORK					0x05
+
+#define CLAM_REQUEST_FLUSH_RESULT				0x06
 
 //in
-#define CLAM_REQUEST_VERSION						0x10
-#define CLAM_REQUEST_CHANNELS						0x11
-#define CLAM_REQUEST_CORES							0x12	//index for channel_id
-#define CLAM_REQUEST_WORK_QUEUE						0x13
+#define CLAM_REQUEST_VERSION						0x80
+#define CLAM_REQUEST_CHANNELS						0x81
+#define CLAM_REQUEST_CORES							0x82	//index for channel_id
+#define CLAM_REQUEST_WORK_QUEUE					0x83
+
+//return uint32_t : miner count
+#define CLAM_REQUEST_MINERS							0x84
+
+//index[15:8] : miner_id
+//struct req_miner_info_t : miner info
+#define CLAM_REQUEST_MINER_INFO					0x85
+
+//index[15:8] : miner_id
+//index[7:0]  : channel_id
+//return struct req_channel_info_t : channel info
+#define CLAM_REQUEST_CHANNEL_INFO				0x86
 
 #define CLAM_MAX_CHANNELS 40
 
@@ -72,7 +101,6 @@ struct channel_info
 	int core_count;
 	uint8_t core_map[CLAM_MAX_CHIP_COUNT];
 	uint32_t last_nonce;
-	int cont_timeout;
 	int cont_hw;
 };
 
@@ -80,31 +108,35 @@ struct clam_info
 {
 	char firmware_version[100];
 	struct work *work_array[WORK_ARRAY_SIZE];
-	int array_top;
 
 	uint32_t channel_count;
 	struct channel_info channels[CLAM_MAX_CHANNELS];
 	
-	int controller_queue_size;
-	uint32_t work_count;
-};
-
-#define CLAM_RESULT_TYPE_NONCE		0x00
-#define CLAM_RESULT_TYPE_QUEUE		0x01
-struct clam_result
-{
-	uint8_t channel_id;
-	uint8_t type;
-	uint8_t queue_size;
-	uint8_t reserved;
-	uint32_t result;
+	volatile int controller_queue_available;
+	uint32_t work_counter;
 };
 
 char *set_clam_clock(char *arg);
 extern bool opt_clam_test_only;
 extern int opt_clam_queue;
 
+struct clam_work
+{
+	uint32_t sequence;
+	uint8_t midstate[32];
+	uint8_t data[12];
+};
 
+struct clam_result
+{
+	uint32_t work_sequnece;
+	uint32_t nonce;
+	uint8_t miner_id;
+	uint8_t channel_id;
+	uint16_t work_queue_avail;
+};
+
+#define CLAM_REQUEST_INDEX(MINER, CHANNEL) ((MINER << 8) | (CHANNEL & 0xff))
 
 #endif /* USE_CLAM */
 #endif	/* CLAM_H */

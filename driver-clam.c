@@ -42,7 +42,7 @@ static bool clam_read_result(struct cgpu_info *cgpu, struct clam_result *result,
 		return false;
 	}
 	//change endian
-	result->result = be32toh(result->result);
+	result->nonce = be32toh(result->nonce);
 	return true;
 }
 
@@ -72,7 +72,21 @@ static bool flush_result(struct cgpu_info *cgpu)
 	return true;
 }
 
-static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned char *data)
+void update_queue_avail(struct cgpu_info* cgpu)
+{
+	struct clam_info* info = cgpu->device_data;
+	uint32_t n, read;
+	int ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, CLAM_REQUEST_INDEX(0, 0), (char *)&n, sizeof(n), &read, C_CLAM_WORK_QUEUE);
+	if (ret != LIBUSB_SUCCESS || read != sizeof(n))
+	{
+		applog(LOG_ERR, "[Clam] read work queue failed, %d", ret);
+	}
+	else
+	{
+		info->controller_queue_available = le32toh(n);
+	}
+}
+static bool write_work(struct cgpu_info *cgpu, uint32_t sequence, unsigned char *midstate, unsigned char *data)
 {
 	if (opt_debug)
 	{
@@ -86,15 +100,15 @@ static bool write_work(struct cgpu_info *cgpu, unsigned char *midstate, unsigned
 	}
 
 	//reverse bye order according to chip spec
-	unsigned char buf[32 + 12];
-	unsigned char *p = buf;
+	struct clam_work cw;
 	int i;
 	for (i=0;i<32;i++)
-		*(p++) = midstate[31-i];
+		cw.midstate[i] = midstate[31-i];
 	for (i=0;i<12;i++)
-		*(p++) = data[11-i];
+		cw.data[i] = data[11-i];
+	cw.sequence = htole32(sequence);
 
-	if (unlikely(!clam_write(cgpu, buf, sizeof(buf), C_CLAM_WRITE_WORK)))
+	if (unlikely(!clam_write(cgpu, &cw, sizeof(cw), C_CLAM_WRITE_WORK)))
 	{
 		applog(LOG_ERR, "[Clam] work write error");
 		return false;
@@ -134,19 +148,34 @@ static bool clam_init(struct cgpu_info *cgpu)
 	applog(LOG_NOTICE, "[Clam] found device [%s]", buf);
 
 	//identify channels
-	ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CHANNELS, 0, 0, buf, sizeof(buf), &read, C_CLAM_CHANNELS);
+	ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CHANNELS, 0, CLAM_REQUEST_INDEX(0, 0), buf, sizeof(buf), &read, C_CLAM_CHANNELS);
 	if (ret != LIBUSB_SUCCESS || read != 4)
 	{
 		applog(LOG_ERR, "[Clam] read device channels error - [%s], ignored.", buf);
 		return false;
 	}
-	info->channel_count = *(uint32_t *)buf;
+	info->channel_count = le32toh(*(uint32_t *)buf);
 
 	//identify chip and cores
 	int channel_id;
 	for (channel_id = 0; channel_id<info->channel_count; channel_id++)
 	{
-		ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CORES, 0, channel_id, buf, sizeof(buf), &read, C_CLAM_CHANNELS);
+		uint32_t clock = htole32(opt_clam_clock);
+		ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_CLOCK, clock, CLAM_REQUEST_INDEX(0, channel_id), C_CLAM_CLOCK);
+		if (ret != LIBUSB_SUCCESS)
+		{
+			applog(LOG_ERR, "[Clam] channel %d : set clock error - [%d], ignored.", channel_id, ret);
+			return false;
+		}
+
+		ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CHANNEL, 0, CLAM_REQUEST_INDEX(0, channel_id), C_CLAM_RESET_CHANNEL);
+		if (ret != LIBUSB_SUCCESS)
+		{
+			applog(LOG_ERR, "[Clam] channel %d : reset error - [%d], ignored.", channel_id, ret);
+			return false;
+		}
+
+		ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CORES, 0, CLAM_REQUEST_INDEX(0, channel_id), buf, sizeof(buf), &read, C_CLAM_CORES);
 		if (ret != LIBUSB_SUCCESS)
 		{
 			applog(LOG_ERR, "[Clam] channel %d : read chip information error - [%d], ignored.", channel_id, ret);
@@ -169,19 +198,13 @@ static bool clam_init(struct cgpu_info *cgpu)
 			}
 		}
 		applog(LOG_NOTICE, "[Clam] channel %d, %d chips, %d cores, core map : %s", channel_id, read, info->channels[channel_id].core_count, bin2hex(buf, read));
-
-		ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_CLOCK, opt_clam_clock, channel_id, C_CLAM_CLOCK);
-		if (ret != LIBUSB_SUCCESS)
-		{
-			applog(LOG_ERR, "[Clam] channel %d : set clock error - [%d], ignored.", channel_id, ret);
-			return false;
-		}
 	}
 
 	if (opt_clam_test_only)
 		return false;
 
-	//flush_result(cgpu);
+	flush_result(cgpu);
+	update_queue_avail(cgpu);
 	return true;
 }
 
@@ -216,7 +239,89 @@ static struct cgpu_info *clam_detect_one(struct libusb_device *dev, struct usb_f
 		return usb_free_cgpu(cgpu);
 	}
 	
-	reset_controller(cgpu);
+//	char buf[64];
+//	int read;
+//	int i;
+//	int ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_VERSION, 0, 0, buf, sizeof(buf), &read, C_CLAM_VERSION);
+//	if (ret != LIBUSB_SUCCESS)
+//	{
+//		applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//		return false;
+//	}
+//	buf[read] = 0;
+//
+//	applog(LOG_ERR, "version:%s", buf);
+//
+//	ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CHANNELS, 0, 0, buf, sizeof(buf), &read, C_CLAM_VERSION);
+//	if (ret != LIBUSB_SUCCESS)
+//	{
+//		applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//		return false;
+//	}
+//	buf[read] = 0;
+//
+//	int channels = *((uint32_t *)buf);
+//	applog(LOG_ERR, "channels:%d", *((uint32_t *)buf));
+//
+//	ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CORES, 0, 0, buf, sizeof(buf), &read, C_CLAM_VERSION);
+//	if (ret != LIBUSB_SUCCESS)
+//	{
+//		applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//		return false;
+//	}
+//	buf[read] = 0;
+//	applog(LOG_ERR, "channel0map:%s", bin2hex(buf, read));
+//
+//	ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_RESET_CHANNEL, 0, 0, C_CLAM_VERSION);
+//	if (ret != LIBUSB_SUCCESS)
+//	{
+//		applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//		return false;
+//	}
+//
+//	cgsleep_ms(2000);
+//	ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_CORES, 0, 0, buf, sizeof(buf), &read, C_CLAM_VERSION);
+//	if (ret != LIBUSB_SUCCESS)
+//	{
+//		applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//		return false;
+//	}
+//	buf[read] = 0;
+//	applog(LOG_ERR, "channel0map:%s", bin2hex(buf, read));
+//
+//
+//	if (1==1)
+//		return false;
+//	struct clam_work work;
+//	struct clam_result2 result;
+//	*((uint32_t *)work.midstate) = 0x12345678;
+//	int wrote,read;
+//	int i;
+//	struct clam_work *ws = calloc(50, sizeof(struct clam_work));
+//	for (i=0;i<10000;i++)
+//	{
+//		int ret = usb_write_timeout(cgpu, (char *)ws, sizeof(struct clam_work) * 50, &wrote, 10000, C_CLAM_CHANNELS);
+//		if (i%1000 == 0)applog(LOG_ERR, "%d:wrote:%d", i, wrote);
+//		if (ret != LIBUSB_SUCCESS)
+//		{
+//			applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//			return false;
+//		}
+
+//		ret = usb_read_timeout(cgpu, (char *)&result, sizeof(result), &read, 1000, C_CLAM_CHANNELS);
+//		if (ret != LIBUSB_SUCCESS)
+//		{
+//			applog(LOG_ERR, "[Clam] usb error:%d", ret);
+//			return false;
+//		}
+
+	//	applog(LOG_ERR, "read:%d, dat:%08x", read, result.nonce);
+//	}
+
+//	if (1==1)
+//		return false;
+
+//	reset_controller(cgpu);
 
 	usb_buffer_clear(cgpu);
 
@@ -248,15 +353,13 @@ static int64_t clam_scanwork(struct thr_info *thr)
 
 	if (cgpu->usbinfo.nodev)
 		return -1;
-	struct clam_result result[8];
-	int read;
-	char buf[64];
-	//int err =usb_read_timeout(cgpu, buf, sizeof(buf), &read, 10000, C_CLAM_READ_DATA);
-	int err = usb_read_once(cgpu, (char *)result, sizeof(result), &read, C_CLAM_READ_DATA);
+	struct clam_result result;
+	uint32_t read;
+	int err = usb_read_timeout(cgpu, (char *)&result, sizeof(result), &read, 10000, C_CLAM_READ_DATA);
 	if (err == LIBUSB_ERROR_TIMEOUT)
 	{
 		//cgsleep_us(0xffffffff / 8 / 32 / opt_clam_clock * opt_clam_queue / 2);
-		cgsleep_us(100000);
+		applog(LOG_WARNING, "[Clam] Read timeout");
 		return 0;
 	}
 	if (err != LIBUSB_SUCCESS)
@@ -271,11 +374,37 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		applog(LOG_ERR, "[Clam Debug] buffer size : %d", usb_buffer_size(cgpu));
 	}
 	
-	int r;
-	int64_t total_hashes = 0;
-	for (r=0;r<read/sizeof(struct clam_result);r++)
+	if (result.miner_id == 0xff)
 	{
-		struct channel_info *ch_info = &info->channels[result[r].channel_id];
+		//queue sync
+		info->controller_queue_available = le32toh(result.work_queue_avail);
+		return 0;
+	}
+	else
+	{
+		uint32_t sequence = le32toh(result.work_sequnece);
+		info->controller_queue_available = le32toh(result.work_queue_avail);
+		if (sequence + WORK_ARRAY_SIZE < info->work_counter)
+		{
+			applog(LOG_WARNING, "[Clam] work array is not big enough");
+			return 0;
+		}
+		else
+		{
+			uint32_t index = sequence % WORK_ARRAY_SIZE;
+			uint32_t nonce = be32toh(result.nonce);
+			uint32_t nonce2 = le32toh(result.nonce);
+//			applog(LOG_ERR, "[Clam Debug] index:%d, %s, %s", index,
+//					test_nonce(info->work_array[index], nonce) ? "true" : "false",
+//					test_nonce(info->work_array[index], nonce2) ? "true" : "false"
+//						);
+			submit_nonce(thr, info->work_array[index], nonce);
+		//	applog(LOG_ERR, "[Clam Debug] queue %d!", info->controller_queue_available);
+			return 0xfffffffful;
+		}
+	}
+//	struct channel_info *ch_info = &info->channels[result.channel_id];
+/*
 		if (result[r].type == CLAM_RESULT_TYPE_NONCE)
 		{
 			uint32_t nonce = be32toh(result[r].result);
@@ -320,75 +449,55 @@ static int64_t clam_scanwork(struct thr_info *thr)
 		}
 		else
 		{
-			applog(LOG_ERR, "[Clam] Protocol error : %08x", result[r].type);
+			//applog(LOG_ERR, "[Clam] Protocol error : %08x", result[r].type);
 		}
-	}
-	return total_hashes;
+		*/
+//	}
 }
 
 static bool clam_queue_full(struct cgpu_info *cgpu)
 {
 	//send work to the device
 	struct clam_info *info = cgpu->device_data;
-	struct work *work = get_queued(cgpu);
 
 	if (cgpu->usbinfo.nodev)
 		return false;
 
-	if (!unlikely(write_work(cgpu, work->midstate, work->data + 64)))
+	if (!info->controller_queue_available)
+		return true;
+
+	uint32_t index = info->work_counter % WORK_ARRAY_SIZE;
+
+	if (info->work_array[index])
+	{
+		work_completed(cgpu, info->work_array[index]);
+		info->work_array[index] = NULL;
+	}
+
+	struct work *work = get_queued(cgpu);
+
+	if (!unlikely(write_work(cgpu, info->work_counter, work->midstate, work->data + 64)))
 	{
 		applog(LOG_ERR, "[Clam] send work error, discarding current work.");
 		work_completed(cgpu, work);
 		return false;
 	}
-	info->work_count++;
-	info->controller_queue_size++;
+	info->work_array[index] = work;
+	info->work_counter++;
+	info->controller_queue_available--;
 
-	if (info->array_top == WORK_ARRAY_SIZE)
-	{
-		//full
-		work_completed(cgpu, info->work_array[info->array_top - 1]);
-	}
-	else
-	{
-		info->array_top++;
-	}
-	int i;
-	for (i = info->array_top - 1; i > 0 ;i--)
-		info->work_array[i] = info->work_array[i-1];
-	info->work_array[0] = work;
-
-	if (info->work_count % 1000 == 0)
-	{
-		//recalibrate queue size
-		uint32_t n,r;
-		int ret = usb_transfer_read(cgpu, CLAM_TYPE_IN, CLAM_REQUEST_WORK_QUEUE, 0, 0, (char *)&n, sizeof(n), &r, C_CLAM_CHANNELS);
-		if (ret == LIBUSB_SUCCESS && r == 4)
-		{
-			info->controller_queue_size = n;
-		}
-	}	
-		
-
-	return info->controller_queue_size >= opt_clam_queue;
+	return info->controller_queue_available == 0;
 }
 
 static void clam_flush_work(struct cgpu_info *cgpu)
 {
 	struct clam_info *info = cgpu->device_data;
-//	if (strcmp(info->firmware_version, "1.0.0.0") == 0)
-//	{
-		applog(LOG_NOTICE, "[Clam] flush work queue");
-		int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_FLUSH_WORK, 0, 0, C_CLAM_FLUSH_WORK);
-		if (ret != LIBUSB_SUCCESS)
-			applog(LOG_ERR, "[Clam] flush failed, %d", ret);
-		info->controller_queue_size = 0;
-//	}
-//	else
-//	{
-//		clam_reinit(cgpu);
-//	}
-	//flush_buffer(cgpu);
+	applog(LOG_NOTICE, "[Clam] flush work queue");
+	int ret = usb_transfer(cgpu, CLAM_TYPE_OUT, CLAM_REQUEST_FLUSH_WORK, 0, 0, C_CLAM_FLUSH_WORK);
+	if (ret != LIBUSB_SUCCESS)
+		applog(LOG_ERR, "[Clam] flush failed, %d", ret);
+
+	update_queue_avail(cgpu);
 }
 
 static void clam_thread_shutdown(struct thr_info *thr)

@@ -2530,7 +2530,7 @@ usb_perform_transfer(struct cgpu_info *cgpu, struct cg_usb_device *usbdev, int i
 #if DO_USB_STATS
 	struct timeval tv_start, tv_finish;
 #endif
-	unsigned char buf[512];
+	unsigned char buf[5120];
 #ifdef WIN32
 	/* On windows the callback_timeout is a safety mechanism only. */
 	bulk_timeout = timeout;
