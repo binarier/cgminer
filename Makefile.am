@@ -89,6 +89,11 @@ if HAS_HASHRATIO
 cgminer_SOURCES += driver-hashratio.c driver-hashratio.h
 endif
 
+if HAS_HFR
+cgminer_SOURCES += driver-hfr.c driver-hfr.h
+cgminer_SOURCES += spi-context.c spi-context.h
+endif
+
 if HAS_BITFURY
 cgminer_SOURCES += driver-bitfury.c driver-bitfury.h
 endif

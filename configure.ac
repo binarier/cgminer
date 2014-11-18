@@ -309,6 +309,19 @@ fi
 AM_CONDITIONAL([HAS_HASHRATIO], [test x$hashratio = xyes])
 
 
+hfr="no"
+
+AC_ARG_ENABLE([hfr],
+	[AC_HELP_STRING([--enable-hfr],[Compile support for HFR (default disabled)])],
+	[hfr=$enableval]
+	)
+if test "x$hfr" = xyes; then
+	AC_DEFINE([USE_HFR], [1], [Defined to 1 if HFR support is wanted])
+	drivercount=x$drivercount
+fi
+AM_CONDITIONAL([HAS_HFR], [test x$hfr = xyes])
+
+
 icarus="no"
 
 AC_ARG_ENABLE([icarus],
@@ -729,6 +742,12 @@ else
 	echo "  Hashratio.ASICs......: Disabled"
 fi
 
+if test "x$hfr" = xyes; then
+	echo "  HFR.ASICs............: Enabled"
+else
+	echo "  HFR.ASICs............: Disabled"
+fi
+
 if test "x$icarus" = xyes; then
 	echo "  Icarus.ASICs/FPGAs...: Enabled"
 else
@@ -754,7 +773,7 @@ else
 fi
 
 #Add any new device to this, along with a no on the end of the test
-if test "x$avalon$avalon2$bab$bflsc$bitforce$bitfury$blockerupter$hashfast$hashratio$icarus$klondike$knc$modminer$drillbit$minion$cointerra$bitmine_A1$ants1$ants2$sp10$sp30" = xnonononononononononononononononononononono; then
+if test "x$avalon$avalon2$bab$bflsc$bitforce$bitfury$blockerupter$hashfast$hashratio$hfr$icarus$klondike$knc$modminer$drillbit$minion$cointerra$bitmine_A1$ants1$ants2$sp10$sp30" = xnononononononononononononononononononononono; then
 	AC_MSG_ERROR([No mining devices configured in])
 fi
 

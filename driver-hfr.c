@@ -36,7 +36,7 @@ struct hfr_result
 
 int hfr_queue_size = 10;
 
-static uint8_t write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
+static uint8_t *write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
 {
 	//zero
 	memset(info->tx_buf, 0, sizeof(info->tx_buf));
@@ -63,7 +63,7 @@ static uint8_t write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data, 
 		return NULL;
 	}
 
-	uint8_t ack = *(info->rx_buf[sizeof(cmd_prem) + sizeof(cmd)]);
+	uint8_t ack = info->rx_buf[sizeof(cmd_prem) + sizeof(cmd)];
 	if (cmd != ack)
 	{
 		applog(LOG_ERR, "command ack error: [%02x], expected:[%02x]", ack, cmd);
@@ -94,11 +94,6 @@ static bool write_reg(struct hfr_info *info, uint8_t address, uint32_t data)
 
 static bool read_reg(struct hfr_info *info, uint8_t address, uint32_t *data)
 {
-	uint8_t send_data[5];
-
-	send_data[0] = address;
-	*((uint32_t *)(send_data + 1)) = htonl(data);
-
 	uint8_t *resp = write_command(info, CMD_READ_REG, &address, 1, 4);
 
 	if (resp == NULL)
@@ -184,14 +179,6 @@ static void hexdump_error(char *prefix, uint8_t *buff, int len)
 	applog_hexdump(prefix, buff, len, LOG_ERR);
 }
 
-static void flush_spi(struct A1_chain *a1)
-{
-	memset(a1->spi_tx, 0, 64);
-	spi_transfer(a1->spi_ctx, a1->spi_tx, a1->spi_rx, 64);
-}
-
-
-
 void hfr_detect(bool hotplug)
 {
 	if (hotplug)
@@ -245,7 +232,6 @@ static bool update_queue_status(struct hfr_info *info)
 
 static int64_t hfr_scanwork(struct thr_info *thr)
 {
-	int i;
 	struct cgpu_info *cgpu = thr->cgpu;
 	struct hfr_info *info = cgpu->device_data;
 	int32_t nonces = 0;
@@ -258,7 +244,8 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 		return 0;
 	}
 
-	for (uint8_t i=0; i<info->send_fifo_length; i++)
+	uint8_t i;
+	for (i=0; i<info->send_fifo_length; i++)
 	{
 		struct hfr_result result;
 		if (!read_nonce(info, &result))
@@ -293,12 +280,13 @@ static bool hfr_queue_full(struct cgpu_info *cgpu)
 		return false;
 	}
 
-	for (int i=0; i<hfr_queue_size - info->receive_fifo_length; i++)
+	int i;
+	for (i=0; i<hfr_queue_size - info->receive_fifo_length; i++)
 	{
 		struct work *work = get_queued(cgpu);
 		if (info->works[info->last_work_id])
 		{
-			work_completed(info->works[info->last_work_id]);
+			work_completed(cgpu, info->works[info->last_work_id]);
 		}
 		info->works[info->last_work_id] = work;
 		if (!write_work(info, work, info->last_work_id))
@@ -321,7 +309,8 @@ static void hfr_flush_work(struct cgpu_info *cgpu)
 	info->last_work_id = 0;
 	info->receive_fifo_length = 0;
 	info->send_fifo_length = 0;
-	for (int i=0; i<sizeof(info->works)/sizeof(info->works[0]); i++)
+	int i;
+	for (i=0; i<sizeof(info->works)/sizeof(info->works[0]); i++)
 	{
 		if (info->works[i])
 		{
