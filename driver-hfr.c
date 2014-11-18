@@ -29,11 +29,111 @@
 static struct board_selector *board_selector;
 static struct spi_ctx *spi;
 
+#define MAX_CMD_LENGTH 100
+
+#define CMD_WRITE_REG 0x81
+#define CMD_READ_REG 0x42
+#define CMD_WRITE_WORK 0x24
+
+static uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
+
+
 struct hfr_info
 {
 	int dummy;
+	uint8_t tx_buf[MAX_CMD_LENGTH];
+	uint8_t rx_buf[MAX_CMD_LENGTH];
+	struct spi_ctx *spi_ctx;
 };
 
+static uint8_t write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
+{
+	//zero
+	memset(info->tx_buf, 0, sizeof(info->tx_buf));
+	memset(info->rx_buf, 0, sizeof(info->rx_buf));
+	uint8_t *buf = info->tx_buf;
+
+	//header
+	memcpy(buf, cmd_prem, sizeof(cmd_prem));
+	buf += sizeof(cmd_prem);
+
+	//command
+	*(buf++) = cmd;
+
+	//command && data
+	if (req_size > 0)
+	{
+		memcpy(buf, data, req_size);
+	}
+
+	//transfer
+	if (!spi_transfer(info->spi_ctx, info->tx_buf, info->rx_buf, sizeof(cmd_prem) + sizeof(cmd) + req_size + resp_size))
+	{
+		applog(LOG_ERR, "spi transfer error");
+		return NULL;
+	}
+
+	uint8_t ack = *(info->rx_buf[sizeof(cmd_prem) + sizeof(cmd)]);
+	if (cmd != ack)
+	{
+		applog(LOG_ERR, "command ack error: [%02x], expected:[%02x]", ack, cmd);
+		return NULL;
+	}
+
+	return info->rx_buf + sizeof(cmd_prem) + sizeof(cmd) + sizeof(ack);
+}
+
+
+static bool write_reg(struct hfr_info *info, uint8_t address, uint32_t data)
+{
+	uint8_t send_data[5];
+
+	send_data[0] = address;
+	*((uint32_t *)(send_data + 1)) = htonl(data);
+
+	uint8_t *resp = write_command(info, CMD_WRITE_REG, send_data, sizeof(send_data), 0);
+
+	if (resp == NULL)
+	{
+		applog(LOG_ERR, "write reg [0x%02x] error", address);
+		return false;
+	}
+
+	return true;
+}
+
+static bool read_reg(struct hfr_info *info, uint8_t address, uint32_t *data)
+{
+	uint8_t send_data[5];
+
+	send_data[0] = address;
+	*((uint32_t *)(send_data + 1)) = htonl(data);
+
+	uint8_t *resp = write_command(info, CMD_READ_REG, &address, 1, 4);
+
+	if (resp == NULL)
+	{
+		applog(LOG_ERR, "read reg [0x%02x] error", address);
+		return false;
+	}
+
+	*data = ntohl(*((uint32_t *)resp));
+
+	return true;
+}
+
+static bool write_work(struct hfr_info *info, uint8_t *work)
+{
+	uint8_t *resp = write_command(info, CMD_WRITE_WORK, work, 44, 0);
+
+	if (resp == NULL)
+	{
+		applog(LOG_ERR, "write work error");
+		return false;
+	}
+
+	return true;
+}
 /********** work queue */
 static bool wq_enqueue(struct work_queue *wq, struct work *work)
 {
