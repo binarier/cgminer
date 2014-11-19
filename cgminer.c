@@ -1779,6 +1779,9 @@ static char *opt_verusage_and_exit(const char *extra)
 #ifdef USE_HASHFAST
 		"hashfast "
 #endif
+#ifdef USE_HFR
+		"HFR "
+#endif
 #ifdef USE_ICARUS
 		"icarus "
 #endif
