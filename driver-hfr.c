@@ -35,7 +35,7 @@ struct hfr_result
 	uint32_t nonce;
 };
 
-int hfr_queue_size = 10;
+int hfr_queue_size = 8;
 
 /********** temporary helper for hexdumping SPI traffic */
 static void applog_hexdump(char *prefix, uint8_t *buff, int len, int level)
@@ -80,13 +80,13 @@ static uint8_t *write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data,
 	int i;
 	for (i=0; i<3; i++)
 	{
-		hexdump_error("sending:", info->tx_buf, length);
+		hexdump("sending:", info->tx_buf, length);
 		if (!spi_transfer(info->spi_ctx, info->tx_buf, info->rx_buf, sizeof(cmd_prem) + sizeof(cmd) + req_size + /* ack */ sizeof(cmd) + resp_size))
 		{
 			applog(LOG_ERR, "spi transfer error");
 			return NULL;
 		}
-		hexdump_error("recving:", info->rx_buf, length);
+		hexdump("recving:", info->rx_buf, length);
 
 		uint8_t *ack = info->rx_buf + sizeof(cmd_prem) + sizeof(cmd) + req_size;
 		if (cmd != *ack)
@@ -150,12 +150,22 @@ static bool reset_chip(struct hfr_info *info)
 	return true;
 }
 
+static bool set_difficulty(struct hfr_info *info, uint32_t diff)
+{
+	if (!write_reg(info, 0x3, diff))
+	{
+		applog(LOG_ERR, "set difficulty error");
+		return false;
+	}
+	return true;
+}
+
 static bool write_work(struct hfr_info *info, struct work *work)
 {
 	uint8_t data[44];
 	memcpy(data, work->midstate, 32);
 	memcpy(data + 32, work->data + 64, 12);
-	hexdump_error("sending work:", data, sizeof(data));
+	hexdump("sending work:", data, sizeof(data));
 	uint8_t *resp = write_command(info, CMD_WRITE_WORK, data, sizeof(data), 0);
 
 	if (resp == NULL)
@@ -268,12 +278,96 @@ static void test(struct hfr_info *info)
 		if (result.nonce != ntohl(*((uint32_t *)(work.data + 64 + 8))))
 		{
 			applog(LOG_ERR, "===============nonce failed");
+
+			do
+			{
+				cgsleep_ms(50);
+				update_queue_status(info);
+		  	applog(LOG_ERR, "rx buffer:%d, tx buffer:%d", info->receive_fifo_length, info->send_fifo_length);
+			}while (info->send_fifo_length == 0);
+			if (!read_nonce(info, &result))
+			{
+				applog(LOG_ERR, "===============read result failed");
+				return;
+			}
+			applog(LOG_ERR, "======== reread nonce: %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
+
 			return;
 		}
 	}
 	
 	
 	return;
+}
+
+static void test2(struct hfr_info *info)
+{
+	uint8_t addr;
+	for (addr = 0x5; addr <= 0x14; addr++)
+	{
+		if (!write_reg(info, addr, (uint32_t)0xfffffffff))
+		{
+			applog(LOG_ERR, "enable core reg %02x failed", addr);
+			return;
+		}
+	}
+	
+	static struct work work[512] = {0};
+	
+	uint16_t core;
+	for (core = 0; core < 512; core++)
+	{
+		for (addr = 0; addr < 32; addr++)
+			work[core].midstate[addr] = addr;
+		for (addr = 64; addr < 64 + 12; addr++)
+			work[core].data[addr] = addr;
+		work[core].midstate[0] = core & 0xff;
+		work[core].midstate[1] = core >> 8;
+		work[core].data[64 + 8] = work[core].midstate[0] ^ work[core].midstate[1];
+	}
+
+	int send = 0;
+	int recv = 0;
+	int i;
+	while(recv < 512)
+	{
+				cgsleep_ms(50);
+		update_queue_status(info);
+		applog(LOG_ERR, "rx buffer:%d, tx buffer:%d", info->receive_fifo_length, info->send_fifo_length);
+		
+		for (i=0;(i<8-info->receive_fifo_length) && (send < 512); i++)
+		{
+			if (!write_work(info, &work[send++]))
+			{
+				applog(LOG_ERR, "write work error:%d", i);
+				return;
+			}
+		}
+
+		struct hfr_result result;		
+		for (i=0; (i<info->send_fifo_length) && (recv < 512); i++)
+		{
+			if (!read_nonce(info, &result))
+			{
+				applog(LOG_ERR, "===============read result failed");
+				return;
+			}
+			
+			struct work *w = &work[recv++];
+	
+			if ((result.midstate0 != (uint8_t)~w->midstate[0]) || (result.midstate1 != (uint8_t)~w->midstate[1]))
+			{
+				applog(LOG_ERR, "===============N failed, %02x, %02x, %02x, %02x,", result.midstate0, result.midstate1, ~w->midstate[0], ~w->midstate[1]);
+				return;
+			}
+			
+			if (result.nonce != ntohl(*((uint32_t *)(w->data + 64 + 8))))
+			{
+				applog(LOG_ERR, "===============nonce failed");
+				return;
+			}
+		}
+	}
 }
 
 void hfr_detect(bool hotplug)
@@ -313,8 +407,26 @@ void hfr_detect(bool hotplug)
 		free(cgpu);
 		return;
 	}
+	if (!set_difficulty(info, 0xffffffffu))
+	{
+		applog(LOG_ERR, "set diff error");
+		spi_exit(info->spi_ctx);
+		free(info);
+		free(cgpu);
+		return;
+	}
 
-	test(info);
+	uint8_t addr;
+	for (addr = 0x5; addr <= 0x14; addr++)
+	{
+		if (!write_reg(info, addr, (uint32_t)0xfffffffff))
+		{
+			applog(LOG_ERR, "enable core reg %02x failed", addr);
+			return;
+		}
+	}
+	
+	
 
 	add_cgpu(cgpu);
 }
@@ -329,31 +441,59 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	applog(LOG_INFO, "HFR running scanwork");
 
+	cgsleep_ms(50);
 	if (!update_queue_status(info))
 	{
 		applog(LOG_ERR, "update_queue_status error");
 		return 0;
 	}
 
+	//applog(LOG_ERR, "rx buffer:%d, tx buffer:%d", info->receive_fifo_length, info->send_fifo_length);
+
 	uint8_t i;
+	
 	for (i=0; i<info->send_fifo_length; i++)
 	{
+		applog(LOG_ERR, "===========yay!!!!!!!!");
 		struct hfr_result result;
 		if (!read_nonce(info, &result))
 		{
 			applog(LOG_ERR, "read_nonce error");
 			return 0;
 		}
-		struct work *work = info->works[result.midstate0];
+		struct work *work = NULL;
+		
+		int j;
+		for (j=0;j<256;j++)
+		{
+			if (info->works[j] && info->works[j]->midstate[0] == result.midstate0 && info->works[j]->midstate[1] == result.midstate1)
+			{
+				work = info->works[j];
+			}
+		}
+		
 		if (work == NULL)
 		{
-			applog(LOG_ERR, "work id %d error, discarded", result.midstate0);
+			applog(LOG_ERR, "work not found, discarded. %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
 			continue;
 		}
 		if (!submit_nonce(thr, work, result.nonce))
 		{
-			applog(LOG_WARNING, "invalid nonce 0x%08x", result.nonce);
-			continue;
+			applog(LOG_WARNING, "invalid nonce %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
+			
+			if (!submit_nonce(thr, work, bswap_32(result.nonce)))
+			{
+				applog(LOG_WARNING, "invalid nonce swaped %02x, %02x, %08x", result.midstate0, result.midstate1, bswap_32(result.nonce));
+				continue;
+			}
+			else
+			{
+				applog(LOG_ERR, "=============ACCEPTED!!!!!! swapped     %02x, %02x, %08x", result.midstate0, result.midstate1, bswap_32(result.nonce));
+			}			
+		}
+		else
+		{
+			applog(LOG_ERR, "=============ACCEPTED!!!!!!      %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
 		}
 		nonces++;
 	}
@@ -365,16 +505,15 @@ static bool hfr_queue_full(struct cgpu_info *cgpu)
 {
 	struct hfr_info *info = cgpu->device_data;
 
-	if (!update_queue_status(info))
-	{
-		applog(LOG_ERR, "update_queue_status failed");
-		return false;
-	}
-
 	int i;
 	for (i=0; i<hfr_queue_size - info->receive_fifo_length; i++)
 	{
 		struct work *work = get_queued(cgpu);
+		if (!work)
+		{
+			applog(LOG_ERR, "get queued failed");
+			return true;
+		}
 		if (info->works[info->last_work_id])
 		{
 			work_completed(cgpu, info->works[info->last_work_id]);
