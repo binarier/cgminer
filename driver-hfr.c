@@ -25,6 +25,7 @@ struct hfr_info
 	uint8_t receive_fifo_length;
 	uint8_t send_fifo_length;
 	uint8_t last_work_id;
+	int avail;
 	struct work *works[256];
 };
 
@@ -157,6 +158,7 @@ static bool set_difficulty(struct hfr_info *info, uint32_t diff)
 		applog(LOG_ERR, "set difficulty error");
 		return false;
 	}
+	applog(LOG_ERR, "set difficulty data to 0x%08x", diff);
 	return true;
 }
 
@@ -193,6 +195,32 @@ static bool read_nonce(struct hfr_info *info, struct hfr_result *result)
 	return true;
 }
 
+static bool enable_core(struct hfr_info *info, uint16_t core, bool enabled)
+{
+		uint8_t addr = (uint8_t)(core >> 5) + 0x5ul;
+		uint32_t data;
+		if (!read_reg(info, addr, &data))
+		{
+			applog(LOG_ERR, "enable_core read reg %02x failed", addr);
+			return false;
+		}
+		
+		if (enabled)
+			data |= 1ul << core;
+		else
+			data &= ~(1ul << core);
+	
+		applog(LOG_ERR, "enable data:[%02x][%08x]", addr, data);
+		
+		if (!write_reg(info, addr, data))
+		{
+			applog(LOG_ERR, "enable core reg %02x failed", addr);
+			return false;
+		}
+		
+		return true;
+}
+
 static bool update_queue_status(struct hfr_info *info)
 {
 	uint32_t data;
@@ -200,6 +228,7 @@ static bool update_queue_status(struct hfr_info *info)
 		return false;
 	info->receive_fifo_length = data & 0xff;
 	info->send_fifo_length = (data >> 8) & 0x7;
+	info->avail = 8 - info->receive_fifo_length;
 	return true;
 }
 
@@ -407,7 +436,7 @@ void hfr_detect(bool hotplug)
 		free(cgpu);
 		return;
 	}
-	if (!set_difficulty(info, 0xffffffffu))
+	if (!set_difficulty(info, 0xfffffffful / (uint32_t)hfr_drv.max_diff))
 	{
 		applog(LOG_ERR, "set diff error");
 		spi_exit(info->spi_ctx);
@@ -415,7 +444,7 @@ void hfr_detect(bool hotplug)
 		free(cgpu);
 		return;
 	}
-
+	
 	uint8_t addr;
 	for (addr = 0x5; addr <= 0x14; addr++)
 	{
@@ -426,10 +455,14 @@ void hfr_detect(bool hotplug)
 		}
 	}
 	
+	//enable_core(info, 31, false);
+	enable_core(info, 30, false);
+//	write_reg(info, 0x5, 0xfffffff);
 	
 
 	add_cgpu(cgpu);
 }
+
 
 
 
@@ -441,7 +474,7 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	applog(LOG_INFO, "HFR running scanwork");
 
-	cgsleep_ms(50);
+	cgsleep_ms(100);
 	if (!update_queue_status(info))
 	{
 		applog(LOG_ERR, "update_queue_status error");
@@ -452,9 +485,11 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	uint8_t i;
 	
+	if (info->send_fifo_length > 0)
+		applog(LOG_ERR, "send fifo:%d", info->send_fifo_length);
+	
 	for (i=0; i<info->send_fifo_length; i++)
 	{
-		applog(LOG_ERR, "===========yay!!!!!!!!");
 		struct hfr_result result;
 		if (!read_nonce(info, &result))
 		{
@@ -480,54 +515,55 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 		if (!submit_nonce(thr, work, result.nonce))
 		{
 			applog(LOG_WARNING, "invalid nonce %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
-			
-			if (!submit_nonce(thr, work, bswap_32(result.nonce)))
-			{
-				applog(LOG_WARNING, "invalid nonce swaped %02x, %02x, %08x", result.midstate0, result.midstate1, bswap_32(result.nonce));
-				continue;
-			}
-			else
-			{
-				applog(LOG_ERR, "=============ACCEPTED!!!!!! swapped     %02x, %02x, %08x", result.midstate0, result.midstate1, bswap_32(result.nonce));
-			}			
+			continue;
 		}
 		else
 		{
-			applog(LOG_ERR, "=============ACCEPTED!!!!!!      %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
+			applog(LOG_ERR, "=============submitted!!!!!!      %02x, %02x, %08x", result.midstate0, result.midstate1, result.nonce);
+			char *hex = bin2hex(work->hash, sizeof(work->hash));
+			applog(LOG_ERR, "============= diff:%d, hash:%s", (uint32_t)share_diff(work), hex);
+			free(hex);
 		}
 		nonces++;
 	}
 
-	return (int64_t)nonces << 32;
+	return ((int64_t)nonces << 32) * (uint32_t)hfr_drv.max_diff;
 }
 
 static bool hfr_queue_full(struct cgpu_info *cgpu)
 {
 	struct hfr_info *info = cgpu->device_data;
 
+	if (info->avail <= 0)
+	{
+		return true;
+	}
+
 	int i;
-	for (i=0; i<hfr_queue_size - info->receive_fifo_length; i++)
+	//for (i=0; i<hfr_queue_size - info->receive_fifo_length; i++)
 	{
 		struct work *work = get_queued(cgpu);
 		if (!work)
 		{
 			applog(LOG_ERR, "get queued failed");
-			return true;
+			return false;
 		}
 		if (info->works[info->last_work_id])
 		{
 			work_completed(cgpu, info->works[info->last_work_id]);
+			info->works[info->last_work_id] = NULL;
 		}
-		info->works[info->last_work_id] = work;
 		if (!write_work(info, work))
 		{
 			applog(LOG_ERR, "write_work failed");
 			return false;
 		}
+		info->works[info->last_work_id] = work;
 		info->last_work_id++;
+		info->avail--;
 	}
 
-	return true;
+	return info->avail <= 0;
 }
 
 static void hfr_flush_work(struct cgpu_info *cgpu)
@@ -551,6 +587,14 @@ static void hfr_flush_work(struct cgpu_info *cgpu)
 
 }
 
+static void hfr_get_statline_before(char *buf, size_t len,
+                                   struct cgpu_info *cgpu)
+{
+        struct hfr_info *info = cgpu->device_data;
+        tailsprintf(buf, len, "rx:%.2d", info->receive_fifo_length);
+}
+
+
 struct device_drv hfr_drv = {
 	.drv_id = DRIVER_hfr,
 	.dname = "HFR",
@@ -561,4 +605,6 @@ struct device_drv hfr_drv = {
 	.scanwork = hfr_scanwork,
 	.queue_full = hfr_queue_full,
 	.flush_work = hfr_flush_work,
+	.get_statline_before = hfr_get_statline_before,
+	.max_diff = 1,
 };
