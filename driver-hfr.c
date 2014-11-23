@@ -20,6 +20,8 @@ struct hfr_info
 	uint8_t tx_buf[MAX_CMD_LENGTH];
 	uint8_t rx_buf[MAX_CMD_LENGTH];
 	struct spi_ctx *spi_ctx;
+	
+	int gpio;
 
 	//per chip
 	uint8_t receive_fifo_length;
@@ -56,7 +58,7 @@ static void hexdump_error(char *prefix, uint8_t *buff, int len)
 	applog_hexdump(prefix, buff, len, LOG_ERR);
 }
 
-static uint8_t *write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
+static uint8_t *hfr_spi_transfer(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
 {
 	//zero
 	memset(info->tx_buf, 0, sizeof(info->tx_buf));
@@ -82,11 +84,16 @@ static uint8_t *write_command(struct hfr_info *info, uint8_t cmd, uint8_t *data,
 	for (i=0; i<3; i++)
 	{
 		hexdump("sending:", info->tx_buf, length);
+		
+		//write(info->gpio, "0", 1);
+		
 		if (!spi_transfer(info->spi_ctx, info->tx_buf, info->rx_buf, sizeof(cmd_prem) + sizeof(cmd) + req_size + /* ack */ sizeof(cmd) + resp_size))
 		{
 			applog(LOG_ERR, "spi transfer error");
+			//write(info->gpio, "1", 1);
 			return NULL;
 		}
+			//write(info->gpio, "1", 1);
 		hexdump("recving:", info->rx_buf, length);
 
 		uint8_t *ack = info->rx_buf + sizeof(cmd_prem) + sizeof(cmd) + req_size;
@@ -115,7 +122,8 @@ static bool write_reg(struct hfr_info *info, uint8_t address, uint32_t data)
 	send_data[0] = address;
 	*((uint32_t *)(send_data + 1)) = htonl(data);
 
-	uint8_t *resp = write_command(info, CMD_WRITE_REG, send_data, sizeof(send_data), 0);
+//	applog(LOG_ERR, "write:[%08x]", htonl(data));
+	uint8_t *resp = hfr_spi_transfer(info, CMD_WRITE_REG, send_data, sizeof(send_data), 0);
 
 	if (resp == NULL)
 	{
@@ -128,7 +136,7 @@ static bool write_reg(struct hfr_info *info, uint8_t address, uint32_t data)
 
 static bool read_reg(struct hfr_info *info, uint8_t address, uint32_t *data)
 {
-	uint8_t *resp = write_command(info, CMD_READ_REG, &address, 1, 4);
+	uint8_t *resp = hfr_spi_transfer(info, CMD_READ_REG, &address, 1, 4);
 
 	if (resp == NULL)
 	{
@@ -137,7 +145,7 @@ static bool read_reg(struct hfr_info *info, uint8_t address, uint32_t *data)
 	}
 
 	*data = ntohl(*((uint32_t *)resp));
-
+//	applog(LOG_ERR, "read:[%08x]", *data);
 	return true;
 }
 
@@ -168,7 +176,7 @@ static bool write_work(struct hfr_info *info, struct work *work)
 	memcpy(data, work->midstate, 32);
 	memcpy(data + 32, work->data + 64, 12);
 	hexdump("sending work:", data, sizeof(data));
-	uint8_t *resp = write_command(info, CMD_WRITE_WORK, data, sizeof(data), 0);
+	uint8_t *resp = hfr_spi_transfer(info, CMD_WRITE_WORK, data, sizeof(data), 0);
 
 	if (resp == NULL)
 	{
@@ -181,7 +189,7 @@ static bool write_work(struct hfr_info *info, struct work *work)
 
 static bool read_nonce(struct hfr_info *info, struct hfr_result *result)
 {
-	uint8_t *resp = write_command(info, CMD_READ_NONCE, NULL, 0, 6);
+	uint8_t *resp = hfr_spi_transfer(info, CMD_READ_NONCE, NULL, 0, 6);
 	if (resp == NULL)
 	{
 		applog(LOG_ERR, "read nonce error");
@@ -427,7 +435,9 @@ void hfr_detect(bool hotplug)
 		free(cgpu);
 		return;
 	}
-
+	
+	//info->gpio = open("/sys/class/gpio/gpio60/value", O_WRONLY);
+	
 	if (!reset_chip(info))
 	{
 		applog(LOG_ERR, "reset chip error");
@@ -436,6 +446,9 @@ void hfr_detect(bool hotplug)
 		free(cgpu);
 		return;
 	}
+	
+	uint32_t data;
+	
 	if (!set_difficulty(info, 0xfffffffful / (uint32_t)hfr_drv.max_diff))
 	{
 		applog(LOG_ERR, "set diff error");
@@ -456,9 +469,11 @@ void hfr_detect(bool hotplug)
 	}
 	
 	//enable_core(info, 31, false);
-	enable_core(info, 30, false);
+	//enable_core(info, 30, false);
 //	write_reg(info, 0x5, 0xfffffff);
 	
+//	enable_core(info, 0, false);
+//	enable_core(info, 1, false);
 
 	add_cgpu(cgpu);
 }
@@ -474,7 +489,7 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	applog(LOG_INFO, "HFR running scanwork");
 
-	cgsleep_ms(100);
+	cgsleep_ms(50);
 	if (!update_queue_status(info))
 	{
 		applog(LOG_ERR, "update_queue_status error");
@@ -606,5 +621,5 @@ struct device_drv hfr_drv = {
 	.queue_full = hfr_queue_full,
 	.flush_work = hfr_flush_work,
 	.get_statline_before = hfr_get_statline_before,
-	.max_diff = 1,
+	.max_diff = 4,
 };
