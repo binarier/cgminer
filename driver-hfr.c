@@ -14,21 +14,34 @@
 
 static const uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
 
-struct hfr_info
-{
-	int dummy;
-	uint8_t tx_buf[MAX_CMD_LENGTH];
-	uint8_t rx_buf[MAX_CMD_LENGTH];
-	struct spi_ctx *spi_ctx;
-	
-	int gpio;
+#define HFR_MAX_SPI_BUSES 1
+#define HFR_WORK_FIFO_LENGTH 8
+#define HFR_MAX_CHIPS_PER_BUS 16
+#define HFR_SPI_RETRY_COUNT 3
 
-	//per chip
+struct hfr_chip
+{
 	uint8_t receive_fifo_length;
 	uint8_t send_fifo_length;
 	uint8_t last_work_id;
-	int avail;
-	struct work *works[256];
+	int receive_fifo_avail;
+	struct work *works[HFR_WORK_FIFO_LENGTH];
+};
+
+struct hfr_spi_bus
+{
+	struct spi_ctx *spi_ctx;
+	uint8_t tx_buf[MAX_CMD_LENGTH];
+	uint8_t rx_buf[MAX_CMD_LENGTH];
+
+	int chip_count;
+	struct hfr_chip chips[HFR_MAX_CHIPS_PER_BUS];
+};
+
+struct hfr_info
+{
+	int spi_count;
+	struct hfr_spi_bus buses[HFR_MAX_SPI_BUSES];
 };
 
 struct hfr_result
@@ -38,32 +51,19 @@ struct hfr_result
 	uint32_t nonce;
 };
 
-int hfr_queue_size = 8;
-
-/********** temporary helper for hexdumping SPI traffic */
-static void applog_hexdump(char *prefix, uint8_t *buff, int len, int level)
+static void dumpbin(int level, char *prefix, uint8_t *buff, int len, int level)
 {
 	char *hex = bin2hex(buff, len);
 	applog(level, "%s:%s", prefix, hex);
 	free(hex);
 }
 
-static void hexdump(char *prefix, uint8_t *buff, int len)
-{
-	applog_hexdump(prefix, buff, len, LOG_DEBUG);
-}
-
-static void hexdump_error(char *prefix, uint8_t *buff, int len)
-{
-	applog_hexdump(prefix, buff, len, LOG_ERR);
-}
-
-static uint8_t *hfr_spi_transfer(struct hfr_info *info, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
+static uint8_t *hfr_spi_transfer(struct hfr_spi_bus *bus, int chip_id, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
 {
 	//zero
-	memset(info->tx_buf, 0, sizeof(info->tx_buf));
-	memset(info->rx_buf, 0, sizeof(info->rx_buf));
-	uint8_t *buf = info->tx_buf;
+	memset(bus->tx_buf, 0, sizeof(bus->tx_buf));
+	memset(bus->rx_buf, 0, sizeof(bus->rx_buf));
+	uint8_t *buf = bus->tx_buf;
 
 	//header
 	memcpy(buf, cmd_prem, sizeof(cmd_prem));
@@ -81,77 +81,69 @@ static uint8_t *hfr_spi_transfer(struct hfr_info *info, uint8_t cmd, uint8_t *da
 	//transfer
 	int length = sizeof(cmd_prem) + sizeof(cmd) * 2 + req_size + resp_size;
 	int i;
-	for (i=0; i<3; i++)
+	for (i=0; i<HFR_SPI_RETRY_COUNT; i++)
 	{
-		hexdump("sending:", info->tx_buf, length);
+		dumpbin(LOG_DEBUG, "SPI Send:", bus->tx_buf, length);
 		
-		//write(info->gpio, "0", 1);
-		
-		if (!spi_transfer(info->spi_ctx, info->tx_buf, info->rx_buf, sizeof(cmd_prem) + sizeof(cmd) + req_size + /* ack */ sizeof(cmd) + resp_size))
+		if (!spi_transfer(bus->spi_ctx, bus->tx_buf, bus->rx_buf, sizeof(cmd_prem) + sizeof(cmd) + req_size + /* ack */ sizeof(cmd) + resp_size))
 		{
-			applog(LOG_ERR, "spi transfer error");
-			//write(info->gpio, "1", 1);
+			applog(LOG_ERR, "SPI%d transfer error", bus->spi_ctx->config.bus);
 			return NULL;
 		}
-			//write(info->gpio, "1", 1);
-		hexdump("recving:", info->rx_buf, length);
+		dumpbin(LOG_DEBUG,"SPI Recv:", bus->rx_buf, length);
 
-		uint8_t *ack = info->rx_buf + sizeof(cmd_prem) + sizeof(cmd) + req_size;
-		if (cmd != *ack)
-		{
-			applog(LOG_ERR, "command ack error: [%02x], expected:[%02x], retrying", *ack, cmd);
-		}
-		else
+		uint8_t *ack = bus->rx_buf + sizeof(cmd_prem) + sizeof(cmd) + req_size;
+		if (cmd == *ack)
 		{
 			if (i > 0)
-			{
-				applog(LOG_ERR, "tried %d times", i+1);
-			}
+				applog(LOG_WARNING, "SPI%d transfer succeeded after %d retries", bus->spi_ctx->config.bus, i);
 			return ack + 1;
 		}
+		applog(LOG_WARNING, "SPI%d ACK error:received [%02x], expected:[%02x], retrying", bus->spi_ctx->config.bus, *ack, cmd);
 	}
-	applog(LOG_ERR, "command failed after %d reties", i);
+	applog(LOG_ERR, "SPI%d failed after %d retries", bus->spi_ctx->config.bus, i);
 	return NULL;
 }
 
 
-static bool write_reg(struct hfr_info *info, uint8_t address, uint32_t data)
+static bool write_reg(struct hfr_spi_bus *bus, int chip_id, uint8_t address, uint32_t data)
 {
 	uint8_t send_data[5];
 
 	send_data[0] = address;
 	*((uint32_t *)(send_data + 1)) = htonl(data);
 
-//	applog(LOG_ERR, "write:[%08x]", htonl(data));
-	uint8_t *resp = hfr_spi_transfer(info, CMD_WRITE_REG, send_data, sizeof(send_data), 0);
+	applog(LOG_DEBUG, "Writing register [%02x] on chip %d.%d [%08x]", address, bus->spi_ctx->config.bus, chip_id, data);
+	uint8_t *resp = hfr_spi_transfer(bus, chip_id, CMD_WRITE_REG, send_data, sizeof(send_data), 0);
 
 	if (resp == NULL)
 	{
-		applog(LOG_ERR, "write reg [0x%02x] error", address);
+		applog(LOG_ERR, "Writing register [%02x] on chip %d.%d [%08x] failed", address, bus->spi_ctx->config.bus, chip_id, data);
 		return false;
 	}
 
 	return true;
 }
 
-static bool read_reg(struct hfr_info *info, uint8_t address, uint32_t *data)
+static bool read_reg(struct hfr_spi_bus *bus, int chip_id, uint8_t address, uint32_t *data)
 {
-	uint8_t *resp = hfr_spi_transfer(info, CMD_READ_REG, &address, 1, 4);
+	uint8_t *resp = hfr_spi_transfer(bus, chip_id, CMD_READ_REG, &address, 1, 4);
 
 	if (resp == NULL)
 	{
-		applog(LOG_ERR, "read reg [0x%02x] error", address);
+		applog(LOG_ERR, "Read register [%02x] on chip %d.%d failed", address, bus->spi_ctx->config.bus, chip_id);
 		return false;
 	}
 
 	*data = ntohl(*((uint32_t *)resp));
-//	applog(LOG_ERR, "read:[%08x]", *data);
+	applog(LOG_DEBUG, "Read register [%02x] on chip %d.%d [%08x]", address, bus->spi_ctx->config.bus, chip_id, *data);
+
 	return true;
 }
 
-static bool reset_chip(struct hfr_info *info)
+static bool reset_chip(struct hfr_spi_bus *bus, int chip_id)
 {
-	if (!write_reg(info, 0x0, 0x1))
+	if (!write_reg(bus, 0x0, 0x1))
 	{
 		applog(LOG_ERR, "reset error");
 		return false;
@@ -175,7 +167,7 @@ static bool write_work(struct hfr_info *info, struct work *work)
 	uint8_t data[44];
 	memcpy(data, work->midstate, 32);
 	memcpy(data + 32, work->data + 64, 12);
-	hexdump("sending work:", data, sizeof(data));
+	dumpbin(LOG_DEBUG,"sending work:", data, sizeof(data));
 	uint8_t *resp = hfr_spi_transfer(info, CMD_WRITE_WORK, data, sizeof(data), 0);
 
 	if (resp == NULL)
