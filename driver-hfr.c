@@ -14,7 +14,9 @@
 
 static const uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
 
-static const int bbb_gpio_ports[] = {30};
+static const int bbb_gpio_ports[] = {
+		30,				//chip 0
+};
 
 #define HFR_MAX_SPI_BUSES 1
 #define HFR_WORK_FIFO_LENGTH 8
@@ -73,7 +75,7 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 	int export = open("/sys/class/gpio/export", O_WRONLY);
 	if (export == -1)
 	{
-		applog(LOG_ERR, "GPIO export file open failed:%s", strerror());
+		applog(LOG_ERR, "GPIO export file open failed:%s", strerror(errno));
 		return false;
 	}
 
@@ -99,12 +101,12 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 		fd = open(buf, O_WRONLY);
 		if (fd == -1)
 		{
-			applog(LOG_ERR, "GPIO export file open failed:%s", strerror());
+			applog(LOG_ERR, "GPIO export file open failed:%s", strerror(errno));
 			goto cleanup;
 		}
 		if (write(fd, "high\n", 5) != 5)
 		{
-			applog(LOG_ERR, "GPIO write direction file %d failed:%s", port, strerror());
+			applog(LOG_ERR, "GPIO write direction file %d failed:%s", port, strerror(errno));
 			close(fd);
 			goto cleanup;
 		}
@@ -114,7 +116,7 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 		fd = open(buf, O_WRONLY);
 		if (fd == -1)
 		{
-			applog(LOG_ERR, "GPIO value file %d open failed:%s", port, strerror());
+			applog(LOG_ERR, "GPIO value file %d open failed:%s", port, strerror(errno));
 			goto cleanup;
 		}
 		fds[chip_id] = fd;
@@ -330,8 +332,6 @@ static void update_chip_status(struct hfr_spi_bus *bus, int chip_id)
 {
 	uint32_t data;
 	struct hfr_chip *chip = &bus->chips[chip_id];
-	if (!chip->enabled)
-		continue;
 
 	if (!read_reg(bus, chip_id, 0x4, &data))
 	{
@@ -374,59 +374,65 @@ void hfr_detect(bool hotplug)
 
 	struct hfr_spi_bus *bus = cgpu->device_data;
 	int i;
-	while (1)
+	//SPI1 for BBB
+	struct spi_config cfg = default_spi_config;
+	cfg.mode = SPI_MODE_3;
+	cfg.bus = 1;
+	cfg.speed = HFR_SPI_BAUD_RATE;
+
+	if ((bus->spi_ctx = spi_init(&cfg)) == NULL)
 	{
-
-		struct spi_config cfg = default_spi_config;
-		cfg.mode = SPI_MODE_3;
-		cfg.bus = 1;
-		cfg.speed = HFR_SPI_BAUD_RATE;
-	
-		if ((bus->spi_ctx = spi_init(&cfg)) == NULL)
-		{
-			applog(LOG_ERR, "SPI1 init failed");
-			goto cleanup;
-		}
-
-		bus->device_diff = HFR_DEFAULT_DEVICE_DIFF;
-		bus->chip_count = HFR_SPI1_CHIP_COUNT;
-
-		for (i=0; i<bus->chip_count; i++)
-		{
-			bus->chips[i].enabled = true;
-
-			if (!reset_chip(bus, i))
-			{
-				applog(LOG_WARNING, "SPI1 chip %d init failed, ignored", i);
-				bus->chips[i].enabled = false;
-				continue;
-			}
-
-			if (!set_difficulty(bus, i, bus->device_diff))
-			{
-				applog(LOG_WARNING, "SPI1 chip %d set difficulty failed, ignored", i);
-				bus->chips[i].enabled = false;
-				continue;
-			}
-
-			uint8_t addr;
-			for (addr = 0x5; addr <= 0x14; addr++)
-			{
-				if (!write_reg(bus, i, addr, 0xffffffffu))
-				{
-					applog(LOG_ERR, "SPI1 chip %d enable core reg %d failed", i, addr);
-					return;
-				}
-			}
-		}
-
-		add_cgpu(cgpu);
-		return;
+		applog(LOG_ERR, "SPI1 init failed");
+		goto cleanup;
 	}
+
+	bus->device_diff = HFR_DEFAULT_DEVICE_DIFF;
+	bus->chip_count = HFR_SPI1_CHIP_COUNT;
+
+	if (!gpio_init(bus, bbb_gpio_ports))
+	{
+		applog(LOG_ERR, "GPIO for SPI1 init failed");
+		goto cleanup;
+	}
+
+	bus->select = gpio_select;
+
+	for (i=0; i<bus->chip_count; i++)
+	{
+		bus->chips[i].enabled = true;
+
+		if (!reset_chip(bus, i))
+		{
+			applog(LOG_WARNING, "SPI1 chip %d init failed, ignored", i);
+			bus->chips[i].enabled = false;
+			continue;
+		}
+
+		if (!set_difficulty(bus, i, bus->device_diff))
+		{
+			applog(LOG_WARNING, "SPI1 chip %d set difficulty failed, ignored", i);
+			bus->chips[i].enabled = false;
+			continue;
+		}
+
+		uint8_t addr;
+		for (addr = 0x5; addr <= 0x14; addr++)
+		{
+			if (!write_reg(bus, i, addr, 0xffffffffu))
+			{
+				applog(LOG_ERR, "SPI1 chip %d enable core reg %d failed", i, addr);
+				return;
+			}
+		}
+	}
+
+	add_cgpu(cgpu);
+	return;
 	
 	cleanup:;
 	free(bus);
 	free(cgpu);
+	return;
 }
 
 
