@@ -14,6 +14,8 @@
 
 static const uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
 
+static const int bbb_gpio_ports[] = {30};
+
 #define HFR_MAX_SPI_BUSES 1
 #define HFR_WORK_FIFO_LENGTH 8
 #define HFR_MAX_CHIPS_PER_BUS 16
@@ -22,6 +24,7 @@ static const uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
 #define HFR_SPI_BAUD_RATE (5000 * 1000)
 #define HFR_CORES_PER_CHIP 512
 #define HFR_DEFAULT_DEVICE_DIFF 2
+#define HFR_BAD_CORE_THRESHOLD 4
 
 struct hfr_chip
 {
@@ -41,6 +44,11 @@ struct hfr_spi_bus
 	uint8_t tx_buf[MAX_CMD_LENGTH];
 	uint8_t rx_buf[MAX_CMD_LENGTH];
 
+	int selected_chip;
+	bool (*init)(struct hfr_spi_bus *);
+	bool (*select)(struct hfr_spi_bus *, int);
+	void *select_data;
+
 	int chip_count;
 	struct hfr_chip chips[HFR_MAX_CHIPS_PER_BUS];
 };
@@ -59,8 +67,102 @@ static void dumpbin(int level, char *prefix, uint8_t *buff, int len)
 	free(hex);
 }
 
+static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
+{
+	//linux gpio fs driver
+	int export = open("/sys/class/gpio/export", O_WRONLY);
+	if (export == -1)
+	{
+		applog(LOG_ERR, "GPIO export file open failed:%s", strerror());
+		return false;
+	}
+
+	bus->select_data = calloc(bus->chip_count, sizeof(int));
+	int *fds = bus->select_data;
+
+	int chip_id;
+	for (chip_id=0; chip_id<bus->chip_count; chip_id++)
+	{
+		int port = gpio_ports[chip_id];
+		char buf[100];
+		sprintf(buf, "%d\n", gpio_ports[chip_id]);
+		int size = strlen(buf) + 1;
+		if (write(export, buf, size) != size)
+		{
+			applog(LOG_ERR, "GPIO port %d export failed", port);
+			goto cleanup;
+		}
+
+		//set direction and active high
+		sprintf(buf, "/sys/class/gpio/gpio%d/direction", port);
+		int fd;
+		fd = open(buf, O_WRONLY);
+		if (fd == -1)
+		{
+			applog(LOG_ERR, "GPIO export file open failed:%s", strerror());
+			goto cleanup;
+		}
+		if (write(fd, "high\n", 5) != 5)
+		{
+			applog(LOG_ERR, "GPIO write direction file %d failed:%s", port, strerror());
+			close(fd);
+			goto cleanup;
+		}
+
+		//get value fd
+		sprintf(buf, "/sys/class/gpio/gpio%d/value", port);
+		fd = open(buf, O_WRONLY);
+		if (fd == -1)
+		{
+			applog(LOG_ERR, "GPIO value file %d open failed:%s", port, strerror());
+			goto cleanup;
+		}
+		fds[chip_id] = fd;
+	}
+
+	close(export);
+	return true;
+
+	cleanup:;
+	for (chip_id=0; chip_id<bus->chip_count; chip_id++)
+	{
+		if (fds[chip_id])
+			close(fds[chip_id]);
+	}
+	free(fds);
+	bus->select_data = NULL;
+	close(export);
+	return false;
+}
+
+static bool gpio_select(struct hfr_spi_bus *bus, int chip_id)
+{
+	int *fds = bus->select_data;
+	if (write(fds[chip_id], "1\n", 2) != 2)
+	{
+		applog(LOG_ERR, "deselect chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
+		return false;
+	}
+	if (write(fds[chip_id], "0\n", 2) != 2)
+	{
+		applog(LOG_ERR, "select chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
+		return false;
+	}
+}
+
+
 static uint8_t *hfr_spi_transfer(struct hfr_spi_bus *bus, int chip_id, uint8_t cmd, uint8_t *data, int req_size, int resp_size)
 {
+	if (bus->selected_chip != chip_id)
+	{
+		if (!bus->select(bus, chip_id))
+		{
+			applog(LOG_ERR, "Select chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
+			return NULL;
+		}
+		bus->selected_chip = chip_id;
+	}
+
 	//zero
 	memset(bus->tx_buf, 0, sizeof(bus->tx_buf));
 	memset(bus->rx_buf, 0, sizeof(bus->rx_buf));
@@ -198,9 +300,9 @@ static bool read_nonce(struct hfr_spi_bus *bus, int chip_id, struct hfr_result *
 	return true;
 }
 
-static bool enable_core(struct hfr_spi_bus *bus, int chip_id, uint16_t core, bool enabled)
+static bool enable_core(struct hfr_spi_bus *bus, int chip_id, uint32_t core, bool enabled)
 {
-	applog(LOG_INFO, "%s chip %d.%d core %d", enabled ? "enabling" : "disabling", bus->spi_ctx->config.bus, chip_id, core);
+	applog(LOG_WARNING, "%s chip %d.%d core %d", enabled ? "enabling" : "disabling", bus->spi_ctx->config.bus, chip_id, core);
 
 	uint8_t addr = (uint8_t)(core >> 5) + 0x5ul;
 	uint32_t data;
@@ -224,24 +326,20 @@ static bool enable_core(struct hfr_spi_bus *bus, int chip_id, uint16_t core, boo
 	return true;
 }
 
-static void update_chip_status(struct hfr_spi_bus *bus)
+static void update_chip_status(struct hfr_spi_bus *bus, int chip_id)
 {
-	int chip_id;
 	uint32_t data;
-	for (chip_id = 0; chip_id < bus->chip_count; chip_id++)
-	{
-		struct hfr_chip *chip = &bus->chips[chip_id];
-		if (!chip->enabled)
-			continue;
+	struct hfr_chip *chip = &bus->chips[chip_id];
+	if (!chip->enabled)
+		continue;
 
-		if (!read_reg(bus, chip_id, 0x4, &data))
-		{
-			applog(LOG_WARNING, "update status for chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
-		}
-		chip->receive_fifo_length = data & 0xff;
-		chip->send_fifo_length = (data >> 8) & 0x7;
-		chip->receive_fifo_avail = HFR_WORK_FIFO_LENGTH - chip->receive_fifo_length;
+	if (!read_reg(bus, chip_id, 0x4, &data))
+	{
+		applog(LOG_WARNING, "update status for chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
 	}
+	chip->receive_fifo_length = data & 0xff;
+	chip->send_fifo_length = (data >> 8) & 0x7;
+	chip->receive_fifo_avail = HFR_WORK_FIFO_LENGTH - chip->receive_fifo_length;
 }
 
 static void dumpwork(struct work *work)
@@ -342,7 +440,6 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	cgsleep_ms(40);
 
-	update_chip_status(bus);
 
 	uint8_t i;
 	int chip_id;
@@ -350,6 +447,12 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 	{
 		struct hfr_chip *chip = &bus->chips[chip_id];
 		
+		if (!chip->enabled)
+			continue;
+
+		update_chip_status(bus, chip_id);
+
+
 		for (i=0; i<chip->send_fifo_length; i++)
 		{
 			struct hfr_result result;
@@ -361,7 +464,7 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 			struct work *work = NULL;
 			int j;
-			for (j=0; j<HFR_WORK_FIFO_LENGTH; j++)
+			for (j=0; j< sizeof(chip->works)/sizeof(chip->works[0]); j++)
 			{
 				if (chip->works[j] && chip->works[j]->midstate[0] == result.midstate0 && chip->works[j]->midstate[1] == result.midstate1)
 				{
@@ -379,7 +482,11 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 			{
 				uint32_t core = result.nonce >> 23;
 				chip->core_errors[core]++;
-				applog(LOG_ERR, "Invalid nonce from chip %d.%d, discarded. %02x-%02x-%08x", bus->spi_ctx->config.bus, chip_id, result.midstate0, result.midstate1, result.nonce);
+				applog(LOG_ERR, "Invalid nonce from chip %d.%d core %d, discarded [%d]. %02x-%02x-%08x", bus->spi_ctx->config.bus, chip_id, core, chip->core_errors[core], result.midstate0, result.midstate1, result.nonce);
+				if (chip->core_errors[core] > HFR_BAD_CORE_THRESHOLD)
+				{
+					enable_core(bus, chip_id, core, false);
+				}
 				continue;
 			}
 			else
