@@ -69,15 +69,17 @@ static void dumpbin(int level, char *prefix, uint8_t *buff, int len)
 	free(hex);
 }
 
-static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
+static bool gpio_init(struct hfr_spi_bus *bus, const int gpio_ports[])
 {
 	//linux gpio fs driver
+	/*
 	int export = open("/sys/class/gpio/export", O_WRONLY);
 	if (export == -1)
 	{
 		applog(LOG_ERR, "GPIO export file open failed:%s", strerror(errno));
 		return false;
 	}
+	*/
 
 	bus->select_data = calloc(bus->chip_count, sizeof(int));
 	int *fds = bus->select_data;
@@ -87,13 +89,16 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 	{
 		int port = gpio_ports[chip_id];
 		char buf[100];
+
+		/*
 		sprintf(buf, "%d\n", gpio_ports[chip_id]);
 		int size = strlen(buf) + 1;
 		if (write(export, buf, size) != size)
 		{
-			applog(LOG_ERR, "GPIO port %d export failed", port);
+			applog(LOG_ERR, "GPIO port %d export failed:%s", port, strerror(errno));
 			goto cleanup;
 		}
+		*/
 
 		//set direction and active high
 		sprintf(buf, "/sys/class/gpio/gpio%d/direction", port);
@@ -122,7 +127,7 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 		fds[chip_id] = fd;
 	}
 
-	close(export);
+	//close(export);
 	return true;
 
 	cleanup:;
@@ -133,23 +138,24 @@ static bool gpio_init(struct hfr_spi_bus *bus, int gpio_ports[])
 	}
 	free(fds);
 	bus->select_data = NULL;
-	close(export);
+	//close(export);
 	return false;
 }
 
 static bool gpio_select(struct hfr_spi_bus *bus, int chip_id)
 {
 	int *fds = bus->select_data;
-	if (write(fds[chip_id], "1\n", 2) != 2)
+	if ((bus->selected_chip != -1) && (write(fds[chip_id], "1\n", 2) != 2))
 	{
-		applog(LOG_ERR, "deselect chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
+		applog(LOG_ERR, "deselect chip %d.%d failed:%s", bus->spi_ctx->config.bus, chip_id, strerror(errno));
 		return false;
 	}
 	if (write(fds[chip_id], "0\n", 2) != 2)
 	{
-		applog(LOG_ERR, "select chip %d.%d failed", bus->spi_ctx->config.bus, chip_id);
+		applog(LOG_ERR, "select chip %d.%d failed:%s", bus->spi_ctx->config.bus, chip_id, strerror(errno));
 		return false;
 	}
+	return true;
 }
 
 
@@ -352,7 +358,7 @@ static void dumpwork(struct work *work)
 
 		char *send = bin2hex(data, sizeof(data));
 		char *hash = bin2hex(work->hash, sizeof(work->hash));
-		applog(LOG_DEBUG, "WorkDump - data[%s] nonce[%08x] hash[%s] diff[%d]", send, work->nonce, hash, (int)share_diff(work));
+		applog(LOG_WARNING, "WorkDump - data[%s] nonce[%08x] hash[%s] diff[%d]", send, work->nonce, hash, (int)share_diff(work));
 		free(hash);
 		free(send);
 	}
@@ -396,6 +402,7 @@ void hfr_detect(bool hotplug)
 	}
 
 	bus->select = gpio_select;
+	bus->selected_chip = -1;
 
 	for (i=0; i<bus->chip_count; i++)
 	{
@@ -444,7 +451,7 @@ static int64_t hfr_scanwork(struct thr_info *thr)
 
 	applog(LOG_INFO, "HFR running scanwork");
 
-	cgsleep_ms(40);
+	cgsleep_ms(300);
 
 
 	uint8_t i;
@@ -523,10 +530,8 @@ static bool hfr_queue_full(struct cgpu_info *cgpu)
 		{
 			struct work *work = get_queued(cgpu);
 			if (!work)
-			{
-				applog(LOG_WARNING, "Get queued work failed");
 				return false;
-			}
+
 			if (chip->works[chip->last_work_id])
 			{
 				work_completed(cgpu, chip->works[chip->last_work_id]);
@@ -539,7 +544,7 @@ static bool hfr_queue_full(struct cgpu_info *cgpu)
 			else
 			{
 				chip->works[chip->last_work_id] = work;
-				chip->last_work_id = (chip->last_work_id) % (sizeof(chip->works)/sizeof(chip->works[0]));
+				chip->last_work_id = (chip->last_work_id + 1) % (sizeof(chip->works)/sizeof(chip->works[0]));
 			}
 			//always decrease avail to prevent stuck with one sick chip
 			chip->receive_fifo_avail--;
