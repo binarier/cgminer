@@ -16,13 +16,14 @@ static const uint8_t cmd_prem[] = { 0x55, 0xaa, 0x55, 0xaa, 0x5d };
 
 static const int bbb_gpio_ports[] = {
 		30,				//chip 0
+		60,
 };
 
 #define HFR_MAX_SPI_BUSES 1
 #define HFR_WORK_FIFO_LENGTH 8
 #define HFR_MAX_CHIPS_PER_BUS 16
 #define HFR_SPI_RETRY_COUNT 3
-#define HFR_SPI1_CHIP_COUNT 1
+#define HFR_SPI1_CHIP_COUNT 2
 #define HFR_SPI_BAUD_RATE (5000 * 1000)
 #define HFR_CORES_PER_CHIP 512
 #define HFR_DEFAULT_DEVICE_DIFF 2
@@ -103,7 +104,7 @@ static bool gpio_init(struct hfr_spi_bus *bus, const int gpio_ports[])
 		//set direction and active high
 		sprintf(buf, "/sys/class/gpio/gpio%d/direction", port);
 		int fd;
-		fd = open(buf, O_WRONLY);
+		fd = open(buf, O_WRONLY|O_SYNC);
 		if (fd == -1)
 		{
 			applog(LOG_ERR, "GPIO export file open failed:%s", strerror(errno));
@@ -118,13 +119,14 @@ static bool gpio_init(struct hfr_spi_bus *bus, const int gpio_ports[])
 
 		//get value fd
 		sprintf(buf, "/sys/class/gpio/gpio%d/value", port);
-		fd = open(buf, O_WRONLY);
+		fd = open(buf, O_WRONLY|O_SYNC);
 		if (fd == -1)
 		{
 			applog(LOG_ERR, "GPIO value file %d open failed:%s", port, strerror(errno));
 			goto cleanup;
 		}
 		fds[chip_id] = fd;
+		write(fd, "1\n", 2);	//default deselect
 	}
 
 	//close(export);
@@ -145,9 +147,10 @@ static bool gpio_init(struct hfr_spi_bus *bus, const int gpio_ports[])
 static bool gpio_select(struct hfr_spi_bus *bus, int chip_id)
 {
 	int *fds = bus->select_data;
-	if ((bus->selected_chip != -1) && (write(fds[chip_id], "1\n", 2) != 2))
+	
+	if ((bus->selected_chip != -1) && (write(fds[bus->selected_chip], "1\n", 2) != 2))
 	{
-		applog(LOG_ERR, "deselect chip %d.%d failed:%s", bus->spi_ctx->config.bus, chip_id, strerror(errno));
+		applog(LOG_ERR, "deselect chip %d.%d failed:%s", bus->spi_ctx->config.bus, bus->selected_chip, strerror(errno));
 		return false;
 	}
 	if (write(fds[chip_id], "0\n", 2) != 2)
